@@ -1,0 +1,687 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>claude9 &mdash; spawn run9 dev boxes preloaded for Claude</title>
+  <meta name="description" content="A CLI that forks a run9 base box, clones your project repos into it, and runs claude -p tasks inside with session persistence for resume." />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%E2%9A%A1%3C/text%3E%3C/svg%3E" />
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
+
+  <style>
+    :root {
+      --background:    hsl(0, 0%,  4%);
+      --background-2:  hsl(0, 0%,  5.5%);
+      --background-3:  hsl(0, 0%,  6%);
+      --card:          hsl(0, 0%,  8%);
+      --foreground:    hsl(0, 0%, 92%);
+      --muted:         hsl(0, 0%, 55%);
+      --muted-2:       hsl(0, 0%, 45%);
+      --border:        hsl(0, 0%, 18%);
+      --border-hover:  hsl(0, 0%, 25%);
+      --highlight:     hsl(0, 0%, 100%);
+
+      --sans: "DM Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, monospace;
+
+      --shadow-panel: 0 18px 40px hsl(0 0% 0% / 0.28);
+      --shadow-code:  0 4px 24px hsl(0 0% 0% / 0.35);
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+      background: var(--background);
+      color: var(--foreground);
+      font-family: var(--sans), sans-serif;
+      font-size: clamp(0.9375rem, 1.2vw, 1.0625rem);
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+
+    ::selection {
+      background: hsl(0 0% 100% / 0.15);
+      color: var(--highlight);
+    }
+
+    a {
+      color: var(--foreground);
+      text-decoration: none;
+      border-bottom: 1px solid var(--border);
+      transition: border-color .15s ease, color .15s ease;
+    }
+    a:hover {
+      color: var(--highlight);
+      border-bottom-color: var(--highlight);
+    }
+
+    .container {
+      max-width: 880px;
+      margin: 0 auto;
+      padding: 0 1.25rem;
+    }
+    @media (min-width: 640px)  { .container { padding: 0 2rem; } }
+    @media (min-width: 1024px) { .container { padding: 0 3rem; } }
+
+    /* ─── header ────────────────────────────────────────────── */
+    .site-header {
+      border-bottom: 1px solid var(--border);
+      padding: 1.25rem 0;
+    }
+    .site-header .row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 1.5rem;
+    }
+    .brand {
+      font-family: var(--mono), monospace;
+      font-size: 0.875rem;
+      font-weight: 700;
+      letter-spacing: -0.01em;
+      color: var(--foreground);
+      border-bottom: none;
+    }
+    .brand span { color: var(--muted-2); }
+
+    .site-nav {
+      display: flex;
+      gap: 1.5rem;
+      font-family: var(--mono), monospace;
+      font-size: 0.75rem;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+    .site-nav a {
+      color: var(--muted);
+      border-bottom: none;
+    }
+    .site-nav a:hover { color: var(--highlight); }
+
+    /* ─── hero ──────────────────────────────────────────────── */
+    .hero {
+      position: relative;
+      padding: 5rem 0 4rem;
+      border-bottom: 1px solid var(--border);
+      overflow: hidden;
+    }
+    #hero-mesh {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      z-index: 0;
+      opacity: 0.9;
+    }
+    .hero-content {
+      position: relative;
+      z-index: 1;
+    }
+    .hero h1 {
+      font-family: var(--sans), sans-serif;
+      font-size: clamp(2.25rem, 5vw, 4.5rem);
+      font-weight: 700;
+      letter-spacing: -0.03em;
+      line-height: 1.05;
+      margin: 0 0 1.25rem;
+    }
+    .hero h1 .num {
+      color: var(--muted-2);
+      font-family: var(--mono), monospace;
+      font-weight: 500;
+    }
+    .hero .tagline {
+      font-size: clamp(1rem, 1.5vw, 1.125rem);
+      color: var(--muted);
+      max-width: 38rem;
+      margin: 0 0 2rem;
+    }
+    .hero .tagline code {
+      color: var(--foreground);
+    }
+
+    .cta-row {
+      display: flex;
+      gap: 0.75rem;
+      flex-wrap: wrap;
+    }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.5rem 1rem;
+      border-radius: 0.375rem;
+      font-family: var(--mono), monospace;
+      font-size: 0.8125rem;
+      font-weight: 500;
+      letter-spacing: 0;
+      border: 1px solid transparent;
+      transition: opacity .15s ease, background .15s ease, border-color .15s ease;
+      cursor: pointer;
+    }
+    .btn-primary {
+      background: var(--foreground);
+      color: #111;
+      border-color: var(--foreground);
+    }
+    .btn-primary:hover { opacity: 0.9; }
+    .btn-secondary {
+      background: transparent;
+      color: var(--foreground);
+      border-color: var(--border);
+    }
+    .btn-secondary:hover { border-color: var(--border-hover); }
+    .btn .arrow { color: inherit; opacity: 0.7; }
+
+    /* ─── sections ──────────────────────────────────────────── */
+    section {
+      padding: 4rem 0;
+      border-bottom: 1px solid var(--border);
+    }
+    section:last-of-type { border-bottom: none; }
+
+    .section-label {
+      display: block;
+      font-family: var(--mono), monospace;
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: var(--muted-2);
+      text-transform: uppercase;
+      letter-spacing: 0.14em;
+      margin-bottom: 0.75rem;
+    }
+    h2 {
+      font-family: var(--sans), sans-serif;
+      font-size: clamp(1.5rem, 3vw, 2.25rem);
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      line-height: 1.15;
+      margin: 0 0 1.25rem;
+    }
+    p { margin: 0 0 1rem; max-width: 42rem; }
+    p:last-child { margin-bottom: 0; }
+
+    code {
+      font-family: var(--mono), monospace;
+      font-size: 0.8125em;
+      color: var(--foreground);
+      background: hsl(0 0% 100% / 0.05);
+      padding: 0.1em 0.35em;
+      border-radius: 0.25rem;
+    }
+
+    /* ─── terminal block ────────────────────────────────────── */
+    .term {
+      margin: 0 0 1rem;
+      background: var(--background-3);
+      border: 1px solid var(--border);
+      border-radius: 0.5rem;
+      box-shadow: var(--shadow-code);
+      overflow: hidden;
+      transition: border-color .15s ease;
+    }
+    .term:hover { border-color: var(--border-hover); }
+
+    .term-bar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 0.5rem 1rem;
+      border-bottom: 1px solid var(--border);
+      background: var(--background-2);
+      font-family: var(--mono), monospace;
+      font-size: 0.6875rem;
+      font-weight: 600;
+      color: var(--muted-2);
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+    }
+    .term-bar .dots {
+      display: flex;
+      gap: 0.375rem;
+    }
+    .term-bar .dots span {
+      width: 0.5rem;
+      height: 0.5rem;
+      border-radius: 50%;
+      background: var(--border);
+    }
+    .term-body {
+      padding: 0.875rem 1.125rem;
+      font-family: var(--mono), monospace;
+      font-size: 0.8125rem;
+      line-height: 1.7;
+      color: var(--foreground);
+      overflow-x: auto;
+    }
+    .term-body pre {
+      margin: 0;
+      font: inherit;
+      white-space: pre;
+    }
+    .term-body .prompt { color: var(--muted-2); user-select: none; }
+    .term-body .cmd    { color: var(--highlight); font-weight: 500; }
+    .term-body .flag   { color: var(--muted); }
+    .term-body .comment{ color: var(--muted-2); }
+    .term-body .arg    { color: var(--foreground); }
+
+    /* ─── command grid ──────────────────────────────────────── */
+    .cmd-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 0;
+      border: 1px solid var(--border);
+      border-radius: 0.5rem;
+      overflow: hidden;
+    }
+    .cmd-grid .row {
+      display: grid;
+      grid-template-columns: 1fr;
+      padding: 0.875rem 1.125rem;
+      border-bottom: 1px solid var(--border);
+      transition: background .15s ease;
+    }
+    .cmd-grid .row:last-child { border-bottom: none; }
+    .cmd-grid .row:hover { background: hsl(0 0% 100% / 0.02); }
+    .cmd-grid .name {
+      font-family: var(--mono), monospace;
+      font-size: 0.8125rem;
+      font-weight: 600;
+      color: var(--highlight);
+      margin-bottom: 0.25rem;
+    }
+    .cmd-grid .desc {
+      font-size: 0.875rem;
+      color: var(--muted);
+    }
+    @media (min-width: 720px) {
+      .cmd-grid .row {
+        grid-template-columns: 12rem 1fr;
+        gap: 1.5rem;
+        align-items: baseline;
+      }
+      .cmd-grid .name { margin-bottom: 0; }
+    }
+
+    /* ─── contract list ─────────────────────────────────────── */
+    .contract {
+      list-style: none;
+      padding: 0;
+      margin: 0 0 1rem;
+      max-width: 42rem;
+    }
+    .contract li {
+      padding: 0.75rem 0;
+      border-bottom: 1px solid var(--border);
+      color: var(--muted);
+      font-size: 0.9375rem;
+    }
+    .contract li:last-child { border-bottom: none; }
+    .contract li code {
+      color: var(--foreground);
+      background: hsl(0 0% 100% / 0.05);
+    }
+
+    /* ─── footer ────────────────────────────────────────────── */
+    .site-footer {
+      padding: 2.5rem 0 3rem;
+      border-top: 1px solid var(--border);
+      font-family: var(--mono), monospace;
+      font-size: 0.75rem;
+      color: var(--muted-2);
+    }
+    .site-footer .container {
+      display: flex;
+      justify-content: space-between;
+      gap: 1rem;
+      flex-wrap: wrap;
+    }
+    .site-footer a {
+      color: var(--muted);
+      border-bottom: none;
+    }
+    .site-footer a:hover { color: var(--highlight); }
+  </style>
+</head>
+<body>
+
+  <header class="site-header">
+    <div class="container row">
+      <a class="brand" href="/">claude<span>9</span></a>
+      <nav class="site-nav">
+        <a href="https://github.com/634750802/claude9">github</a>
+        <a href="https://github.com/634750802/claude9/releases">releases</a>
+        <a href="#skill">skill</a>
+      </nav>
+    </div>
+  </header>
+
+  <div class="container">
+
+    <section class="hero">
+      <canvas id="hero-mesh" aria-hidden="true"></canvas>
+      <div class="hero-content">
+        <h1>claude<span class="num">9</span></h1>
+        <p class="tagline">
+          Spawn <code>run9</code> dev boxes preloaded for Claude. Fork a base
+          box, clone your project's repos into it, and run <code>claude -p</code>
+          tasks with session persistence &mdash; resume by box id.
+        </p>
+        <div class="cta-row">
+          <a class="btn btn-primary" href="#install">
+            Install <span class="arrow">&rarr;</span>
+          </a>
+          <a class="btn btn-secondary" href="#skill">
+            For agents <span class="arrow">&rarr;</span>
+          </a>
+          <a class="btn btn-secondary" href="https://github.com/634750802/claude9">
+            View on GitHub
+          </a>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <span class="section-label">// concept</span>
+      <h2>A CLI for forked dev boxes.</h2>
+      <p>
+        <code>claude9</code> is a small Rust CLI that forks a preconfigured
+        <code>run9</code> base box, clones a project group's repos into
+        <code>/home/guy/workspace/repos/</code> inside it, and runs
+        <code>claude -p</code> tasks on the box with session persistence
+        so follow-ups continue the same conversation.
+      </p>
+      <p>
+        Config and per-box state live under
+        <code>&lt;project&gt;/.claude9/</code>, discovered by walking up
+        from CWD like git finds <code>.git/</code>. Multiple project
+        groups on one machine stay isolated by default.
+      </p>
+    </section>
+
+    <section id="install">
+      <span class="section-label">// install</span>
+      <h2>One line.</h2>
+      <div class="term">
+        <div class="term-bar">
+          <span>install.sh</span>
+          <span class="dots"><span></span><span></span><span></span></span>
+        </div>
+        <div class="term-body"><pre><span class="prompt">$</span> <span class="cmd">curl</span> <span class="flag">-fsSL</span> <span class="arg">https://raw.githubusercontent.com/634750802/claude9/main/install.sh</span> <span class="flag">|</span> <span class="cmd">sh</span></pre></div>
+      </div>
+      <p>
+        Prebuilt binaries for <code>darwin-arm64</code>,
+        <code>linux-amd64</code>, and <code>linux-arm64</code> are
+        published on
+        <a href="https://github.com/634750802/claude9/releases">GitHub Releases</a>.
+        Pin a version with <code>sh -s v0.1.0</code>, or override the
+        install path with <code>CLAUDE9_INSTALL_DIR=~/.local/bin</code>.
+      </p>
+    </section>
+
+    <section>
+      <span class="section-label">// quick tour</span>
+      <h2>Four commands, one session.</h2>
+      <div class="term">
+        <div class="term-bar">
+          <span>~/projects/my-group</span>
+          <span class="dots"><span></span><span></span><span></span></span>
+        </div>
+        <div class="term-body"><pre><span class="comment"># create .claude9/config.toml, edit repo list</span>
+<span class="prompt">$</span> <span class="cmd">claude9</span> <span class="arg">config</span>
+
+<span class="comment"># create a box, clone configured repos into it</span>
+<span class="prompt">$</span> <span class="cmd">claude9</span> <span class="arg">spawn</span> <span class="flag">--name</span> <span class="arg">my-box</span>
+
+<span class="comment"># stream a claude -p turn on the box</span>
+<span class="prompt">$</span> <span class="cmd">claude9</span> <span class="arg">task my-box</span> <span class="flag">"audit db9-server for N+1 queries"</span>
+
+<span class="comment"># follow up on the same session</span>
+<span class="prompt">$</span> <span class="cmd">claude9</span> <span class="arg">resume my-box</span> <span class="flag">"draft a fix for the worst three"</span></pre></div>
+      </div>
+    </section>
+
+    <section id="skill">
+      <span class="section-label">// agent skill</span>
+      <h2>Let your agent drive it.</h2>
+      <p>
+        <code>claude9</code> ships with a <code>SKILL.md</code> &mdash; a
+        self-contained brief that teaches Claude Code (or any other agent)
+        the four verbs, the base-box contract, discovery rules, and the
+        gotchas. Drop it into your agent's skills directory:
+      </p>
+      <div class="term">
+        <div class="term-bar">
+          <span>install SKILL.md</span>
+          <span class="dots"><span></span><span></span><span></span></span>
+        </div>
+        <div class="term-body"><pre><span class="prompt">$</span> <span class="cmd">curl</span> <span class="flag">-fsSL</span> <span class="arg">https://raw.githubusercontent.com/634750802/claude9/main/SKILL.md</span> <span class="flag">-o</span> <span class="arg">~/.claude/skills/claude9.md</span></pre></div>
+      </div>
+      <p>
+        Or inline it into your project's <code>CLAUDE.md</code> &mdash;
+        anything that reads markdown will do. View the source on
+        <a href="https://github.com/634750802/claude9/blob/main/SKILL.md">GitHub</a>.
+      </p>
+    </section>
+
+    <section>
+      <span class="section-label">// commands</span>
+      <h2>What each verb does.</h2>
+      <div class="cmd-grid">
+        <div class="row">
+          <div class="name">claude9 config</div>
+          <div class="desc">Create / open <code>.claude9/config.toml</code> in <code>$EDITOR</code>.</div>
+        </div>
+        <div class="row">
+          <div class="name">claude9 spawn</div>
+          <div class="desc">Fork the base box, clone configured repos, optionally run an inline task.</div>
+        </div>
+        <div class="row">
+          <div class="name">claude9 task</div>
+          <div class="desc">Stream one <code>claude -p</code> turn on an existing box. Saves the session id for resume.</div>
+        </div>
+        <div class="row">
+          <div class="name">claude9 resume</div>
+          <div class="desc">Continue the last session on a box with a follow-up prompt.</div>
+        </div>
+      </div>
+    </section>
+
+    <section>
+      <span class="section-label">// base box contract</span>
+      <h2>Prepare the base box once.</h2>
+      <p>
+        <code>claude9</code> doesn't provision anything automatically. Before
+        you run <code>spawn</code>, prepare a <code>run9</code> box with:
+      </p>
+      <ul class="contract">
+        <li>A remote user <code>guy</code> owning <code>/home/guy/workspace</code>.</li>
+        <li>A <code>claude</code> CLI authenticated as <code>guy</code>, supporting <code>-p --output-format stream-json --verbose</code> and <code>--resume &lt;sid&gt;</code>.</li>
+        <li>A <code>gh</code> CLI authenticated as <code>guy</code> (for private-repo cloning).</li>
+        <li>A <code>git</code> global identity set for <code>guy</code>.</li>
+      </ul>
+      <p>
+        Everything else &mdash; language toolchains, build tools, shell
+        helpers &mdash; is up to you. See
+        <a href="https://github.com/634750802/claude9/blob/main/SKILL.md">SKILL.md</a>
+        for the full contract and the list of non-goals.
+      </p>
+    </section>
+
+  </div>
+
+  <footer class="site-footer">
+    <div class="container">
+      <span>claude9 &middot; built on run9</span>
+      <span>
+        <a href="https://github.com/634750802/claude9">source</a> &middot;
+        <a href="https://github.com/634750802/claude9/releases">releases</a>
+      </span>
+    </div>
+  </footer>
+
+  <script>
+    (function () {
+      const canvas = document.getElementById('hero-mesh');
+      if (!canvas) return;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+
+      const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+      const PARTICLE_COUNT = 42;
+      const MAX_DIST = 150;
+      const MOUSE_RADIUS = 160;
+
+      let width = 0;
+      let height = 0;
+      let dpr = 1;
+      let particles = [];
+      let mouse = { x: -9999, y: -9999, active: false };
+      let rafId = null;
+      let running = true;
+      let t0 = performance.now();
+
+      function rand(min, max) { return min + Math.random() * (max - min); }
+
+      function makeParticles() {
+        particles = new Array(PARTICLE_COUNT).fill(0).map(() => ({
+          x: rand(0, width),
+          y: rand(0, height),
+          vx: rand(-0.18, 0.18),
+          vy: rand(-0.18, 0.18),
+          r:  rand(0.8, 1.9),
+          shape: Math.random() < 0.3 ? 'square' : 'circle',
+          phase: rand(0, Math.PI * 2),
+          speed: rand(0.0006, 0.0014),
+        }));
+      }
+
+      function resize() {
+        const rect = canvas.getBoundingClientRect();
+        dpr = Math.min(window.devicePixelRatio || 1, 2);
+        width = rect.width;
+        height = rect.height;
+        canvas.width = Math.floor(width * dpr);
+        canvas.height = Math.floor(height * dpr);
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        if (particles.length === 0) makeParticles();
+      }
+
+      function step(now) {
+        rafId = null;
+        if (!running) return;
+        const t = now - t0;
+
+        ctx.clearRect(0, 0, width, height);
+
+        // update
+        for (const p of particles) {
+          p.x += p.vx;
+          p.y += p.vy;
+          if (p.x < -10) p.x = width + 10;
+          if (p.x > width + 10) p.x = -10;
+          if (p.y < -10) p.y = height + 10;
+          if (p.y > height + 10) p.y = -10;
+
+          if (mouse.active) {
+            const dx = mouse.x - p.x;
+            const dy = mouse.y - p.y;
+            const d2 = dx * dx + dy * dy;
+            if (d2 < MOUSE_RADIUS * MOUSE_RADIUS && d2 > 1) {
+              const d = Math.sqrt(d2);
+              const pull = (1 - d / MOUSE_RADIUS) * 0.06;
+              p.x += (dx / d) * pull;
+              p.y += (dy / d) * pull;
+            }
+          }
+        }
+
+        // connections
+        for (let i = 0; i < particles.length; i++) {
+          const a = particles[i];
+          for (let j = i + 1; j < particles.length; j++) {
+            const b = particles[j];
+            const dx = a.x - b.x;
+            const dy = a.y - b.y;
+            const d2 = dx * dx + dy * dy;
+            if (d2 < MAX_DIST * MAX_DIST) {
+              const d = Math.sqrt(d2);
+              const alpha = (1 - d / MAX_DIST) * 0.14;
+              ctx.strokeStyle = 'hsla(0, 0%, 100%, ' + alpha.toFixed(3) + ')';
+              ctx.lineWidth = 0.7;
+              ctx.beginPath();
+              ctx.moveTo(a.x, a.y);
+              ctx.lineTo(b.x, b.y);
+              ctx.stroke();
+            }
+          }
+        }
+
+        // particles
+        for (const p of particles) {
+          const breath = 0.6 + 0.4 * (0.5 + 0.5 * Math.sin(t * p.speed + p.phase));
+          const alpha = (0.35 + 0.35 * breath).toFixed(3);
+          ctx.fillStyle = 'hsla(0, 0%, 100%, ' + alpha + ')';
+          if (p.shape === 'square') {
+            const s = p.r * 2 * breath;
+            ctx.fillRect(p.x - s / 2, p.y - s / 2, s, s);
+          } else {
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, p.r * breath, 0, Math.PI * 2);
+            ctx.fill();
+          }
+        }
+
+        if (!reduced) rafId = requestAnimationFrame(step);
+      }
+
+      function start() {
+        if (rafId != null) return;
+        running = true;
+        rafId = requestAnimationFrame(step);
+      }
+      function stop() {
+        running = false;
+        if (rafId != null) {
+          cancelAnimationFrame(rafId);
+          rafId = null;
+        }
+      }
+
+      resize();
+      window.addEventListener('resize', () => { resize(); });
+      canvas.parentElement.addEventListener('mousemove', (e) => {
+        const rect = canvas.getBoundingClientRect();
+        mouse.x = e.clientX - rect.left;
+        mouse.y = e.clientY - rect.top;
+        mouse.active = true;
+      });
+      canvas.parentElement.addEventListener('mouseleave', () => {
+        mouse.active = false;
+        mouse.x = -9999;
+        mouse.y = -9999;
+      });
+      document.addEventListener('visibilitychange', () => {
+        if (document.hidden) stop(); else start();
+      });
+
+      if (reduced) {
+        // draw a single static frame
+        step(performance.now());
+      } else {
+        start();
+      }
+    })();
+  </script>
+
+</body>
+</html>
