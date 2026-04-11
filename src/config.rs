@@ -27,6 +27,19 @@ pub struct Defaults {
 /// claude use its own default".
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct ClaudeOptions {
+    /// `--model <MODEL>`. Accepts either a short alias for the latest
+    /// version in a family (`opus`, `sonnet`, `haiku`) or a fully
+    /// qualified model id (`claude-opus-4-6`). None = let claude pick
+    /// its own default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+
+    /// `--effort <LEVEL>`. Claude accepts one of:
+    /// `low`, `medium`, `high`, `max`. Controls how much the model
+    /// "thinks" before answering — `max` is the heaviest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
+
     /// `--permission-mode <MODE>`. Claude accepts one of:
     /// `default`, `acceptEdits`, `bypassPermissions`, `plan`.
     /// Headless mode can't show approval prompts, so set this (or

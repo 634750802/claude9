@@ -418,6 +418,14 @@ fn extract_box_id(view: &Value) -> Result<String> {
 /// bash parsing.
 fn build_claude_flags(opts: &ClaudeOptions) -> String {
     let mut out = String::new();
+    if let Some(model) = opts.model.as_deref() {
+        out.push_str(" --model ");
+        out.push_str(&shell_single_quote(model));
+    }
+    if let Some(effort) = opts.effort.as_deref() {
+        out.push_str(" --effort ");
+        out.push_str(&shell_single_quote(effort));
+    }
     if let Some(mode) = opts.permission_mode.as_deref() {
         out.push_str(" --permission-mode ");
         out.push_str(&shell_single_quote(mode));
