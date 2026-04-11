@@ -1,6 +1,8 @@
 use anyhow::{anyhow, bail, Context, Result};
-use chrono::Utc;
-use claude_codes::ClaudeOutput;
+use chrono::{Local, Utc};
+use claude_codes::{
+    ClaudeOutput, ContentBlock, ToolResultBlock, ToolResultContent, ToolUseBlock,
+};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::Path;
@@ -12,6 +14,46 @@ use crate::config::{self, ClaudeOptions, REMOTE_USER, REPOS_DIR, WORKSPACE};
 use crate::resolver;
 use crate::run9;
 use crate::state::{self, BoxMeta};
+
+/// Width of the `[HH:MM:SS] ` prefix that `elog` emits — used by
+/// `elog_cont` to left-pad continuation lines so they visually align
+/// with the first line of the same event.
+const TS_PAD: &str = "           "; // 11 spaces == "[HH:MM:SS] ".len()
+
+/// Timestamped log line on stderr. Everything that's not the assistant's
+/// result text goes through here, so the user can pipe stdout cleanly.
+fn elog(msg: impl AsRef<str>) {
+    eprintln!(
+        "[{}] {}",
+        Local::now().format("%H:%M:%S"),
+        msg.as_ref()
+    );
+}
+
+/// Continuation line for a multi-line event (tool result body, git
+/// output, etc.). Skips the timestamp but keeps the same indentation,
+/// so a block reads as one unit instead of N separate events.
+fn elog_cont(msg: impl AsRef<str>) {
+    eprintln!("{}{}", TS_PAD, msg.as_ref());
+}
+
+/// Emit a block of text to stderr with one timestamp on the first
+/// non-empty line. Used for subprocess passthrough (git fetch, repo
+/// clone output) so a burst of lines reads as a single event.
+fn elog_lines(text: &str) {
+    let mut first = true;
+    for line in text.lines() {
+        if line.is_empty() {
+            continue;
+        }
+        if first {
+            elog(line);
+            first = false;
+        } else {
+            elog_cont(line);
+        }
+    }
+}
 
 pub fn config_cmd() -> Result<()> {
     let path = config::ensure_exists()?;
@@ -33,9 +75,9 @@ pub fn spawn(args: SpawnArgs) -> Result<()> {
         .clone()
         .unwrap_or_else(|| cfg.defaults.shape.clone());
 
-    println!("[claude9] resolving base snap from box '{}'", base_box);
+    elog(format!("[claude9] resolving base snap from box '{}'", base_box));
     let snap_id = resolver::resolve_base_snap(&base_box)?;
-    println!("[claude9] base snap: {}", snap_id);
+    elog(format!("[claude9] base snap: {}", snap_id));
 
     let whoami = std::env::var("USER").unwrap_or_else(|_| "unknown".into());
     let labels = [
@@ -44,13 +86,13 @@ pub fn spawn(args: SpawnArgs) -> Result<()> {
         ("claude9-owner", whoami.as_str()),
     ];
 
-    println!("[claude9] creating box (shape={})", shape);
+    elog(format!("[claude9] creating box (shape={})", shape));
     let created = run9::box_create_from_snap(args.name.as_deref(), &snap_id, &shape, &labels)?;
     let box_id = extract_box_id(&created)?;
-    println!("[claude9] box created: {}", box_id);
+    elog(format!("[claude9] box created: {}", box_id));
 
     wait_for_ready(&box_id, Duration::from_secs(180))?;
-    println!("[claude9] box ready");
+    elog("[claude9] box ready");
 
     // Ensure repos dir exists (cheap idempotent op in case base snap lacks it).
     run9::box_exec(
@@ -66,7 +108,7 @@ pub fn spawn(args: SpawnArgs) -> Result<()> {
     let mut failed: Vec<String> = Vec::new();
 
     if args.no_update {
-        println!("[claude9] --no-update set, skipping repo sync");
+        elog("[claude9] --no-update set, skipping repo sync");
         for p in &cfg.projects {
             project_names.push(p.local_name());
         }
@@ -74,7 +116,7 @@ pub fn spawn(args: SpawnArgs) -> Result<()> {
         for p in &cfg.projects {
             let local = p.local_name();
             project_names.push(local.clone());
-            println!("[claude9] sync {} -> {}", p.repo, local);
+            elog(format!("[claude9] sync {} -> {}", p.repo, local));
 
             let mut env = HashMap::new();
             env.insert("C9_REPO".into(), p.repo.clone());
@@ -98,15 +140,11 @@ fi
                 &["/bin/bash", "-lc", script],
             ) {
                 Ok(res) => {
-                    if !res.stdout.trim().is_empty() {
-                        println!("{}", res.stdout.trim_end());
-                    }
-                    if !res.stderr.trim().is_empty() {
-                        eprintln!("{}", res.stderr.trim_end());
-                    }
+                    elog_lines(res.stdout.trim_end());
+                    elog_lines(res.stderr.trim_end());
                 }
                 Err(e) => {
-                    eprintln!("[claude9] sync failed for {}: {}", p.repo, e);
+                    elog(format!("[claude9] sync failed for {}: {}", p.repo, e));
                     failed.push(p.repo.clone());
                 }
             }
@@ -125,7 +163,7 @@ fi
     state::save_meta(&meta)?;
 
     if !failed.is_empty() {
-        eprintln!("[claude9] repo sync failures: {:?}", failed);
+        elog(format!("[claude9] repo sync failures: {:?}", failed));
     }
 
     // Optional inline task.
@@ -134,8 +172,8 @@ fi
         run_claude_task(&box_id, &p, None, &cfg.claude)?;
     }
 
-    println!("[claude9] box_id={}", box_id);
-    println!("[claude9] next: claude9 task {} \"<prompt>\"", box_id);
+    elog(format!("[claude9] box_id={}", box_id));
+    elog(format!("[claude9] next: claude9 task {} \"<prompt>\"", box_id));
     Ok(())
 }
 
@@ -182,6 +220,13 @@ struct ClaudeStreamState {
     session_id: Option<String>,
     is_error: bool,
     final_result: Option<String>,
+    /// `tool_use_id` → rendered label (e.g. `[Read] /path/to/file`).
+    /// Populated when we see an Assistant `ToolUseBlock`; consumed when
+    /// the matching `ToolResultBlock` arrives. Required because claude
+    /// can fan out multiple tool calls in one turn, and results come back
+    /// in a separate (often interleaved) User event — without this map
+    /// the user can't tell which `↳` belongs to which call.
+    tool_labels: HashMap<String, String>,
 }
 
 impl ClaudeStreamState {
@@ -190,6 +235,7 @@ impl ClaudeStreamState {
             session_id: None,
             is_error: false,
             final_result: None,
+            tool_labels: HashMap::new(),
         }
     }
 
@@ -204,7 +250,7 @@ impl ClaudeStreamState {
             Err(e) => {
                 // Not a known claude event — surface the raw line so the
                 // user can see what's happening even if we can't type it.
-                eprintln!("[claude9] unparsed: {}", e.raw_line);
+                elog(format!("[claude9] unparsed: {}", e.raw_line));
                 return;
             }
         };
@@ -217,14 +263,45 @@ impl ClaudeStreamState {
 
         match &output {
             ClaudeOutput::System(sys) if sys.is_init() => {
-                println!("[claude9] session init");
+                elog("[claude9] session init");
             }
             ClaudeOutput::Assistant(_) => {
+                // Assistant text content is the only thing that reaches
+                // stdout — keeps `claude9 task ... > out.md` clean.
                 if let Some(text) = output.text_content() {
                     println!("{}", text);
                 }
                 for tool in output.tool_uses() {
-                    println!("[tool: {}]", tool.name);
+                    let lines = render_tool_use(tool);
+                    // First line is the header (gets the timestamp);
+                    // body lines use elog_cont so a multi-line Bash
+                    // command / Edit diff reads as one event. Only the
+                    // header is stored as the correlation label so the
+                    // matching ToolResult echoes a compact back-ref
+                    // instead of the full body.
+                    let header = lines
+                        .first()
+                        .cloned()
+                        .unwrap_or_else(|| format!("[{}]", tool.name));
+                    for (i, line) in lines.iter().enumerate() {
+                        if i == 0 {
+                            elog(line);
+                        } else {
+                            elog_cont(line);
+                        }
+                    }
+                    self.tool_labels.insert(tool.id.clone(), header);
+                }
+            }
+            ClaudeOutput::User(user) => {
+                // Tool results come back as synthetic user messages with
+                // ToolResult content blocks. The real user prompt echo
+                // shows up as Text blocks and is naturally skipped below.
+                for block in &user.message.content {
+                    if let ContentBlock::ToolResult(tr) = block {
+                        let label = self.tool_labels.remove(&tr.tool_use_id);
+                        render_tool_result(tr, label.as_deref());
+                    }
                 }
             }
             ClaudeOutput::Result(result) => {
@@ -235,9 +312,9 @@ impl ClaudeStreamState {
                 self.final_result = result.result.clone();
             }
             ClaudeOutput::Error(err) => {
-                eprintln!("[claude9] anthropic error: {:?}", err);
+                elog(format!("[claude9] anthropic error: {:?}", err));
             }
-            _ => {} // User echo, rate-limit events, control msgs — silent.
+            _ => {} // Rate-limit events, control msgs — silent.
         }
     }
 }
@@ -270,7 +347,7 @@ fn run_claude_task(
         resume_frag, extra_flags,
     );
 
-    println!("[claude9] running claude -p on {} (stream)", box_id);
+    elog(format!("[claude9] running claude -p on {} (stream)", box_id));
 
     let mut stream = ClaudeStreamState::new();
     run9::box_exec_streaming(
@@ -286,7 +363,7 @@ fn run_claude_task(
     // can still be resumed.
     if let Some(sid) = &stream.session_id {
         state::save_session(box_id, sid)?;
-        eprintln!("[claude9] session: {}", sid);
+        elog(format!("[claude9] session: {}", sid));
     }
 
     if stream.is_error {
@@ -365,4 +442,273 @@ fn build_claude_flags(opts: &ClaudeOptions) -> String {
 fn shell_single_quote(s: &str) -> String {
     let escaped = s.replace('\'', "'\\''");
     format!("'{}'", escaped)
+}
+
+// ────────────────────────────────────────────────────────────────────────
+//  Tool rendering
+//
+//  claude -p streams tool calls as Assistant events with ToolUseBlock
+//  content, and tool results come back as User events with ToolResult
+//  blocks. We render a one-line summary for each, choosing which field
+//  to show based on the tool name. Unknown tools fall back to a
+//  truncated JSON dump.
+// ────────────────────────────────────────────────────────────────────────
+
+/// Max chars for tool input summaries (e.g. long Bash commands).
+const TOOL_INPUT_MAX: usize = 240;
+/// Max number of lines to preview from a tool result. Anything past
+/// this is replaced with a `… (N more lines)` footer.
+const TOOL_RESULT_MAX_LINES: usize = 8;
+/// Max chars per preview line. Long lines get an ellipsis so we don't
+/// blow out the terminal on a single run of concatenated output.
+const TOOL_RESULT_LINE_MAX: usize = 200;
+
+/// Render a tool call as one or more display lines. Element `[0]` is
+/// the header (gets a timestamp via `elog`); any extra elements are
+/// body continuation lines (`elog_cont`, no timestamp). Output is
+/// capped at `TOOL_RESULT_MAX_LINES` with a `… (N more lines)` footer.
+///
+/// Multi-line inputs (Bash heredocs, Edit old/new strings, Write
+/// content, Task prompts) get expanded here — a single-line summary
+/// for a 40-line heredoc drops all the interesting detail.
+fn render_tool_use(tool: &ToolUseBlock) -> Vec<String> {
+    let name = tool.name.as_str();
+    let input = &tool.input;
+    let s = |k: &str| input.get(k).and_then(|v| v.as_str());
+    let u = |k: &str| input.get(k).and_then(|v| v.as_u64());
+    let b = |k: &str| input.get(k).and_then(|v| v.as_bool());
+
+    let mut out: Vec<String> = Vec::new();
+
+    match name {
+        "Bash" => {
+            let cmd = s("command").unwrap_or("");
+            let cmd_lines: Vec<&str> = cmd.lines().collect();
+            let first = cmd_lines.first().copied().unwrap_or("");
+            let mut header = format!("[Bash] {}", truncate(first, TOOL_INPUT_MAX));
+            if let Some(desc) = s("description") {
+                header.push_str(&format!("  # {}", truncate(desc, 80)));
+            }
+            out.push(header);
+            for line in cmd_lines.iter().skip(1) {
+                out.push(format!("       {}", truncate(line, TOOL_RESULT_LINE_MAX)));
+            }
+        }
+        "Read" => {
+            let path = s("file_path").unwrap_or("?");
+            let header = match (u("offset"), u("limit")) {
+                (Some(o), Some(l)) => format!("[Read] {} (lines {}–{})", path, o, o + l),
+                (Some(o), None) => format!("[Read] {} (from line {})", path, o),
+                _ => format!("[Read] {}", path),
+            };
+            out.push(header);
+        }
+        "Write" => {
+            let path = s("file_path").unwrap_or("?");
+            let content = s("content").unwrap_or("");
+            let bytes = content.len();
+            let nlines = content.lines().count();
+            out.push(format!("[Write] {} ({} bytes, {} lines)", path, bytes, nlines));
+            for line in content.lines() {
+                out.push(format!("       {}", truncate(line, TOOL_RESULT_LINE_MAX)));
+            }
+        }
+        "Edit" => {
+            let path = s("file_path").unwrap_or("?");
+            let old = s("old_string").unwrap_or("");
+            let new = s("new_string").unwrap_or("");
+            let header = if b("replace_all").unwrap_or(false) {
+                format!("[Edit] {} (replace_all)", path)
+            } else {
+                format!("[Edit] {}", path)
+            };
+            out.push(header);
+            // Unified-diff-ish preview: `- old …` then `+ new …`. Keeps
+            // the order meaningful even when one side is multi-line.
+            for line in old.lines() {
+                out.push(format!("     - {}", truncate(line, TOOL_RESULT_LINE_MAX)));
+            }
+            for line in new.lines() {
+                out.push(format!("     + {}", truncate(line, TOOL_RESULT_LINE_MAX)));
+            }
+        }
+        "Grep" => {
+            let pat = s("pattern").unwrap_or("");
+            let mut header = format!("[Grep] /{}/", truncate(pat, 80));
+            if let Some(p) = s("path") {
+                header.push_str(&format!(" in {}", p));
+            }
+            if let Some(g) = s("glob") {
+                header.push_str(&format!(" glob={}", g));
+            }
+            if let Some(t) = s("type") {
+                header.push_str(&format!(" type={}", t));
+            }
+            out.push(header);
+        }
+        "Glob" => {
+            let pat = s("pattern").unwrap_or("");
+            let mut header = format!("[Glob] {}", pat);
+            if let Some(p) = s("path") {
+                header.push_str(&format!(" in {}", p));
+            }
+            out.push(header);
+        }
+        "WebFetch" => {
+            let url = s("url").unwrap_or("?");
+            out.push(format!("[WebFetch] {}", url));
+            if let Some(prompt) = s("prompt") {
+                for line in prompt.lines() {
+                    out.push(format!("       {}", truncate(line, TOOL_RESULT_LINE_MAX)));
+                }
+            }
+        }
+        "WebSearch" => {
+            let query = s("query").unwrap_or("?");
+            out.push(format!("[WebSearch] {}", truncate(query, TOOL_INPUT_MAX)));
+        }
+        "Task" => {
+            let sub = s("subagent_type").unwrap_or("?");
+            let desc = s("description").unwrap_or("");
+            out.push(format!("[Task:{}] {}", sub, truncate(desc, 120)));
+            if let Some(prompt) = s("prompt") {
+                for line in prompt.lines() {
+                    out.push(format!("       {}", truncate(line, TOOL_RESULT_LINE_MAX)));
+                }
+            }
+        }
+        "TodoWrite" => {
+            let todos = input.get("todos").and_then(|v| v.as_array());
+            let n = todos.map(|a| a.len()).unwrap_or(0);
+            out.push(format!("[TodoWrite] {} item(s)", n));
+            if let Some(items) = todos {
+                for item in items {
+                    let content = item
+                        .get("content")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("?");
+                    let status = item
+                        .get("status")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    let marker = match status {
+                        "completed" => "✓",
+                        "in_progress" => "→",
+                        _ => "·",
+                    };
+                    out.push(format!(
+                        "     {} {}",
+                        marker,
+                        truncate(content, TOOL_RESULT_LINE_MAX)
+                    ));
+                }
+            }
+        }
+        _ => {
+            // Unknown tool — dump compact JSON of input so nothing is lost.
+            let json = serde_json::to_string(&tool.input).unwrap_or_default();
+            out.push(format!("[{}] {}", name, truncate(&json, TOOL_INPUT_MAX)));
+        }
+    }
+
+    // Uniform line cap — shared with render_tool_result. A 120-line
+    // Bash heredoc would otherwise bury everything else in the stream.
+    cap_preview_lines(&mut out);
+    out
+}
+
+/// Clip `lines` in-place to at most `TOOL_RESULT_MAX_LINES` entries,
+/// appending a `… (N more lines)` footer when anything was dropped.
+/// Callers never need to apply the cap themselves. The footer is
+/// indented to match the standard body indent used by every renderer.
+fn cap_preview_lines(lines: &mut Vec<String>) {
+    if lines.len() <= TOOL_RESULT_MAX_LINES {
+        return;
+    }
+    let dropped = lines.len() - TOOL_RESULT_MAX_LINES;
+    lines.truncate(TOOL_RESULT_MAX_LINES);
+    lines.push(format!("       … ({} more lines)", dropped));
+}
+
+/// Emit a multi-line preview of a tool result to stderr. Newlines are
+/// preserved so file reads / build output stay readable. The header line
+/// gets a `↳` marker (plus `✗` on error) and echoes the original tool
+/// call's label (e.g. `↳ [Read] file.rs`) so concurrent fan-out calls
+/// stay visually paired with their results. Continuation lines are
+/// indented to align under the header. Everything past
+/// `TOOL_RESULT_MAX_LINES` collapses into a `… (N more lines)` footer.
+/// Structured content is flattened by concatenating any `text` fields.
+fn render_tool_result(tr: &ToolResultBlock, call_label: Option<&str>) {
+    let raw = match tr.content.as_ref() {
+        Some(ToolResultContent::Text(t)) => t.clone(),
+        Some(ToolResultContent::Structured(blocks)) => blocks
+            .iter()
+            .filter_map(|v| v.get("text").and_then(|t| t.as_str()).map(str::to_string))
+            .collect::<Vec<_>>()
+            .join("\n"),
+        None => return,
+    };
+    if raw.trim().is_empty() {
+        return;
+    }
+
+    // Drop empty / whitespace-only lines and trim trailing whitespace
+    // so `  123  \t` doesn't waste horizontal space.
+    let lines: Vec<String> = raw
+        .lines()
+        .map(|l| l.trim_end())
+        .filter(|l| !l.is_empty())
+        .map(|l| truncate(l, TOOL_RESULT_LINE_MAX))
+        .collect();
+
+    if lines.is_empty() {
+        return;
+    }
+
+    let total = lines.len();
+    let show = total.min(TOOL_RESULT_MAX_LINES);
+    let marker = if tr.is_error.unwrap_or(false) { "✗ " } else { "" };
+
+    // Header: correlate back to the call. If we somehow missed the
+    // tool_use (shouldn't happen in practice, but stream-json is
+    // best-effort), fall back to a short id suffix so there's still
+    // *some* anchor for the reader.
+    let header = match call_label {
+        Some(l) => format!("  ↳ {}{}", marker, l),
+        None => format!(
+            "  ↳ {}<unknown call {}>",
+            marker,
+            short_id(&tr.tool_use_id)
+        ),
+    };
+    elog(header);
+
+    for line in lines.iter().take(show) {
+        elog_cont(format!("    {}", line));
+    }
+
+    if total > show {
+        elog_cont(format!("    … ({} more lines)", total - show));
+    }
+}
+
+/// Last 6 chars of a tool_use_id like `toolu_01ABC...xyz` — enough to
+/// disambiguate within one turn without flooding the log with noise.
+fn short_id(id: &str) -> String {
+    let n = id.chars().count();
+    if n <= 6 {
+        return id.to_string();
+    }
+    id.chars().skip(n - 6).collect()
+}
+
+/// Truncate `s` to at most `max` chars, appending `…` when truncated.
+/// Char-count aware so it doesn't slice UTF-8 mid-codepoint.
+fn truncate(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    let mut out: String = s.chars().take(max).collect();
+    out.push('…');
+    out
 }
