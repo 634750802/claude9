@@ -8,7 +8,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::cli::{ResumeArgs, SpawnArgs, TaskArgs};
-use crate::config::{self, REMOTE_USER, REPOS_DIR, WORKSPACE};
+use crate::config::{self, ClaudeOptions, REMOTE_USER, REPOS_DIR, WORKSPACE};
 use crate::resolver;
 use crate::run9;
 use crate::state::{self, BoxMeta};
@@ -131,7 +131,7 @@ fi
     // Optional inline task.
     let prompt = resolve_prompt(args.task.clone(), args.task_file.as_deref())?;
     if let Some(p) = prompt {
-        run_claude_task(&box_id, &p, None)?;
+        run_claude_task(&box_id, &p, None, &cfg.claude)?;
     }
 
     println!("[claude9] box_id={}", box_id);
@@ -140,16 +140,18 @@ fi
 }
 
 pub fn task(args: TaskArgs) -> Result<()> {
+    let cfg = config::load()?;
     let prompt = resolve_prompt(join_opt(&args.prompt), args.file.as_deref())?
         .ok_or_else(|| anyhow!("no prompt given (positional args or -f FILE)"))?;
-    run_claude_task(&args.box_id, &prompt, None)
+    run_claude_task(&args.box_id, &prompt, None, &cfg.claude)
 }
 
 pub fn resume(args: ResumeArgs) -> Result<()> {
+    let cfg = config::load()?;
     let session = state::load_session(&args.box_id)?;
     let prompt = resolve_prompt(join_opt(&args.prompt), args.file.as_deref())?
         .ok_or_else(|| anyhow!("no follow-up given (positional args or -f FILE)"))?;
-    run_claude_task(&args.box_id, &prompt, Some(&session))
+    run_claude_task(&args.box_id, &prompt, Some(&session), &cfg.claude)
 }
 
 fn join_opt(parts: &[String]) -> Option<String> {
@@ -240,22 +242,33 @@ impl ClaudeStreamState {
     }
 }
 
-fn run_claude_task(box_id: &str, prompt: &str, resume_session: Option<&str>) -> Result<()> {
+fn run_claude_task(
+    box_id: &str,
+    prompt: &str,
+    resume_session: Option<&str>,
+    claude_opts: &ClaudeOptions,
+) -> Result<()> {
     let mut env = HashMap::new();
     env.insert("C9_PROMPT".into(), prompt.to_string());
 
     // stream-json requires --verbose when used with --print/-p.
     // Default resume behavior reuses the same session_id; pass --fork-session
     // if you ever want a fresh id per turn.
-    let cmd = match resume_session {
-        Some(sid) => format!(
-            r#"claude -p --resume {} --output-format stream-json --verbose "$C9_PROMPT""#,
-            sid
-        ),
-        None => {
-            r#"claude -p --output-format stream-json --verbose "$C9_PROMPT""#.to_string()
-        }
-    };
+    //
+    // Extra flags (permission mode, tool allow/deny-lists) come from the
+    // `[claude]` section of config.toml. Headless mode can't show approval
+    // prompts, so tools like WebFetch are silently denied unless the user
+    // opts in via `permission_mode = "bypassPermissions"` or an explicit
+    // `allowed_tools` list.
+    let extra_flags = build_claude_flags(claude_opts);
+    let resume_frag = resume_session
+        .map(|sid| format!(" --resume {}", shell_single_quote(sid)))
+        .unwrap_or_default();
+
+    let cmd = format!(
+        r#"claude -p{}{} --output-format stream-json --verbose "$C9_PROMPT""#,
+        resume_frag, extra_flags,
+    );
 
     println!("[claude9] running claude -p on {} (stream)", box_id);
 
@@ -319,4 +332,37 @@ fn extract_box_id(view: &Value) -> Result<String> {
         }
     }
     bail!("could not find box id in create response: {}", view)
+}
+
+/// Render a `ClaudeOptions` as extra CLI flags, ready to be spliced into
+/// a bash command. Returns an empty string if no options are set; otherwise
+/// each flag is prefixed with a leading space so concatenation stays clean.
+/// Values are single-quoted so tool patterns like `Bash(git:*)` survive
+/// bash parsing.
+fn build_claude_flags(opts: &ClaudeOptions) -> String {
+    let mut out = String::new();
+    if let Some(mode) = opts.permission_mode.as_deref() {
+        out.push_str(" --permission-mode ");
+        out.push_str(&shell_single_quote(mode));
+    }
+    if opts.dangerously_skip_permissions {
+        out.push_str(" --dangerously-skip-permissions");
+    }
+    if !opts.allowed_tools.is_empty() {
+        out.push_str(" --allowedTools ");
+        out.push_str(&shell_single_quote(&opts.allowed_tools.join(",")));
+    }
+    if !opts.disallowed_tools.is_empty() {
+        out.push_str(" --disallowedTools ");
+        out.push_str(&shell_single_quote(&opts.disallowed_tools.join(",")));
+    }
+    out
+}
+
+/// Wrap a string in single quotes for safe interpolation into a bash
+/// command. Any embedded `'` is escaped as `'\''` — the standard trick
+/// to close, escape-literal, and reopen the quote.
+fn shell_single_quote(s: &str) -> String {
+    let escaped = s.replace('\'', "'\\''");
+    format!("'{}'", escaped)
 }

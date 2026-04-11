@@ -12,12 +12,44 @@ pub struct Config {
     pub defaults: Defaults,
     #[serde(default)]
     pub projects: Vec<Project>,
+    #[serde(default)]
+    pub claude: ClaudeOptions,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Defaults {
     pub base_box: String,
     pub shape: String,
+}
+
+/// User-configurable flags forwarded to every `claude -p` invocation.
+/// All fields are optional; empty / none means "don't pass the flag, let
+/// claude use its own default".
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct ClaudeOptions {
+    /// `--permission-mode <MODE>`. Claude accepts one of:
+    /// `default`, `acceptEdits`, `bypassPermissions`, `plan`.
+    /// Headless mode can't show approval prompts, so set this (or
+    /// `dangerously_skip_permissions`) if you need tools like WebFetch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_mode: Option<String>,
+
+    /// When `true`, pass `--dangerously-skip-permissions` to every
+    /// `claude -p` invocation. Skips every permission check — use only
+    /// on a box you fully trust / that's ephemeral.
+    #[serde(default)]
+    pub dangerously_skip_permissions: bool,
+
+    /// `--allowedTools` — explicit allow-list. Passed as a comma-joined
+    /// single arg, e.g. `["WebFetch", "Bash(git:*)"]` becomes
+    /// `--allowedTools 'WebFetch,Bash(git:*)'`.
+    #[serde(default)]
+    pub allowed_tools: Vec<String>,
+
+    /// `--disallowedTools` — explicit deny-list, same serialization as
+    /// `allowed_tools`.
+    #[serde(default)]
+    pub disallowed_tools: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -65,6 +97,7 @@ impl Default for Config {
                     name: None,
                 },
             ],
+            claude: ClaudeOptions::default(),
         }
     }
 }
