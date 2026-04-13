@@ -176,14 +176,19 @@ fi
         elog(format!("[claude9] repo sync failures: {:?}", failed));
     }
 
+    // Print box_id early — before the optional task streams its output —
+    // so the user (or a wrapping script) can capture it regardless of how
+    // much claude output follows.
+    elog(format!("[claude9] box_id={}", box_id));
+
     // Optional inline task.
     let prompt = resolve_prompt(args.task.clone(), args.task_file.as_deref())?;
-    if let Some(p) = prompt {
-        run_claude_task(&box_id, &p, None, &cfg.claude)?;
+    if let Some(ref p) = prompt {
+        run_claude_task(&box_id, p, None, &cfg.claude)?;
     }
 
-    elog(format!("[claude9] box_id={}", box_id));
-    elog(format!("[claude9] next: claude9 task {} \"<prompt>\"", box_id));
+    let next_cmd = if prompt.is_some() { "resume" } else { "task" };
+    elog(format!("[claude9] next: claude9 {} {} \"<prompt>\"", next_cmd, box_id));
     Ok(())
 }
 
