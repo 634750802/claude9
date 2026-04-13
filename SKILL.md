@@ -33,9 +33,12 @@ Do **not** use `claude9` for:
 - **Project group** — a directory tree whose root contains `.claude9/config.toml`.
   The config lists which repos get cloned into spawned boxes and any overrides
   to box shape / base box name.
-- **Box id** — every spawned box has a short id (e.g. `fern-echo`). All
-  subsequent `task` / `resume` calls are keyed by this id. `spawn` prints it
-  at the end and also saves metadata under `.claude9/state/<box-id>/`.
+- **Box id** — every spawned box has a short id. When `--name` is given
+  it's used as a prefix with a random suffix appended (e.g.
+  `--name db9` → `db9-a1b2c3d4`); otherwise run9 auto-allocates one
+  (e.g. `plum-ant`). All subsequent `task` / `resume` calls are keyed by
+  this id. `spawn` prints it at the end and also saves metadata under
+  `.claude9/state/<box-id>/`.
 - **Session id** — claude's own session id, saved in
   `.claude9/state/<box-id>/session.txt` so `resume` can continue the same
   conversation.
@@ -98,6 +101,15 @@ shape    = "8c16g"                # run9 shape for spawned boxes
 repo = "owner/repo"
 # Optional:
 # name = "alias"   # local dir name; defaults to basename of repo
+
+[claude]
+# All fields optional. Omitted = let claude use its own default.
+model = "opus"                        # alias or full id (claude-opus-4-6)
+effort = "max"                        # low | medium | high | max
+# permission_mode = "bypassPermissions" # default | acceptEdits | bypassPermissions | plan
+dangerously_skip_permissions = true   # skip every permission check (ephemeral boxes only)
+# allowed_tools = ["WebFetch", "Bash(git:*)"]
+# disallowed_tools = []
 ```
 
 ### `claude9 spawn [OPTIONS]`
@@ -107,19 +119,28 @@ every configured repo into `/home/guy/workspace/repos/<name>` inside the box,
 and persist metadata. Optionally run a claude task immediately.
 
 ```
-claude9 spawn [--name <box-id>]
+claude9 spawn [--name <prefix>]
+              [--desc <purpose>]
               [--task <prompt> | --task-file <path>]
               [--no-update]
               [--base-box <name>]
               [--shape <shape>]
 ```
 
-- `--name` — explicit box id; omit to let portal-api allocate one.
+- `--name` — name prefix for the box; a random 8-hex suffix is appended
+  (e.g. `--name db9` → `db9-a1b2c3d4`). Omit to let run9 auto-allocate.
+- `--desc` — short description of what the box is for; stored as a
+  `claude9-task` label on the box (visible via `run9 box ls --label claude9-task`).
 - `--task` / `--task-file` — run an inline claude task after the box is ready;
   its session id gets saved to `.claude9/state/<box-id>/session.txt`.
 - `--no-update` — skip git pull/clone entirely. Use when the base snap already
   has fresh checkouts and you want to boot fast.
 - `--base-box` / `--shape` — per-invocation overrides of config defaults.
+
+Every spawned box carries a fixed description
+(`Managed by claude9. Do not operate on this box directly.`) and labels:
+`claude9=managed`, `claude9-base=<base>`, `claude9-owner=<$USER>`,
+and optionally `claude9-task=<desc>`.
 
 Env escape hatch: set `CLAUDE9_BASE_SNAP_ID=<snap-id>` to bypass
 `run9 box inspect` and pin an explicit snap id. Useful when the base box is
@@ -134,8 +155,8 @@ final `session_id` to `.claude9/state/<box-id>/session.txt`, overwriting any
 previous one. Exits non-zero if claude reports an error.
 
 ```sh
-claude9 task fern-echo "audit the db9-server package for N+1 queries"
-claude9 task fern-echo -f ./prompt.md
+claude9 task db9-a1b2c3d4 "audit the db9-server package for N+1 queries"
+claude9 task db9-a1b2c3d4 -f ./prompt.md
 ```
 
 ### `claude9 resume <box-id> [PROMPT...]`
@@ -145,7 +166,7 @@ Read the saved session id, then run
 Same streaming display. Fails loudly if no session is saved for the box id.
 
 ```sh
-claude9 resume fern-echo "now draft a fix for the worst three"
+claude9 resume db9-a1b2c3d4 "now draft a fix for the worst three"
 ```
 
 Claude's `--resume` reuses the same session id by default, so
@@ -159,9 +180,10 @@ is ever added).
 ```sh
 cd /path/to/project-group
 claude9 config                          # create .claude9/config.toml, edit repo list
-claude9 spawn --name my-box             # box id is "my-box"; repos cloned inside
-claude9 task my-box "first prompt"
-claude9 resume my-box "follow up on the same session"
+claude9 spawn --name db9 --desc "fix auth token refresh #327"
+# → box id printed, e.g. db9-a1b2c3d4; repos cloned inside
+claude9 task db9-a1b2c3d4 "first prompt"
+claude9 resume db9-a1b2c3d4 "follow up on the same session"
 ```
 
 ### Spawn + inline task
@@ -180,7 +202,7 @@ claude9 spawn --name quick --no-update
 ### Targeting a pre-forked golden snap
 
 ```sh
-CLAUDE9_BASE_SNAP_ID=svabcd1234 claude9 spawn --name my-box
+CLAUDE9_BASE_SNAP_ID=svabcd1234 claude9 spawn --name db9
 ```
 
 ## Layout
