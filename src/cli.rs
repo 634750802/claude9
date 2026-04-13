@@ -26,9 +26,13 @@ pub enum Command {
 
 #[derive(Args)]
 pub struct SpawnArgs {
-    /// Explicit box id; omit to let portal-api allocate one
+    /// Name prefix for the box (a random suffix is appended, e.g. mybox-a1b2c3d4)
     #[arg(long)]
     pub name: Option<String>,
+
+    /// Short description of what this box is for (stored as claude9-task label)
+    #[arg(long)]
+    pub desc: Option<String>,
 
     /// Inline task prompt to run after the box is ready
     #[arg(long)]

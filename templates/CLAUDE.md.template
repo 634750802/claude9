@@ -1,0 +1,21 @@
+# CLAUDE.md
+
+## Workspace layout
+
+- `repos/` — every project repo you might need is already cloned here. `cd` into each one to work on it; they're plain `git clone`s with full history, fully writable.
+- Everything outside `repos/` is infra — don't rely on it for the task.
+
+## Tooling
+
+- Use **`gh`** for anything GitHub-side: issues, PRs, reviews, checks, release notes, cross-repo code search. Prefer `gh api` / `gh pr` / `gh issue` over hand-crafted URLs or the web UI.
+- Use **`git`** for local history, branching, staging, diffing. Commit with clear messages. Don't `--amend` or force-push unless asked.
+
+## Golden rules (non-negotiable)
+
+1. **Never delete or damage online resources.** No destructive API calls, no dropping tables, no force-push to shared branches. Don't touch anything unrelated to the task.
+2. **No workarounds.** If something's broken, fix the root cause. If you can't, stop and report — don't patch around it.
+3. **Never merge PRs** during dev or review work. You may open, push, review, and comment — merging is the user's call.
+4. **Read enough code and facts first.** Before proposing a change, read the surrounding code, the actual config, the real data shape. Don't pattern-match from the task description alone.
+5. **Make sure the code actually solves the problem.** Not a lookalike, not a partial fix — verify behaviorally.
+6. **Don't solve out-of-scope problems.** No opportunistic refactors, no "while I'm here" cleanups, no speculative generalization. Scope = the task.
+7. **Tests and format must pass.** Run them. If something breaks, the task isn't done.

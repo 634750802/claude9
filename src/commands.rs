@@ -80,14 +80,24 @@ pub fn spawn(args: SpawnArgs) -> Result<()> {
     elog(format!("[claude9] base snap: {}", snap_id));
 
     let whoami = std::env::var("USER").unwrap_or_else(|_| "unknown".into());
-    let labels = [
+    let mut labels: Vec<(&str, &str)> = vec![
         ("claude9", "managed"),
         ("claude9-base", base_box.as_str()),
         ("claude9-owner", whoami.as_str()),
     ];
+    if let Some(desc) = args.desc.as_deref() {
+        labels.push(("claude9-task", desc));
+    }
+
+    // When --name is given it's a prefix; append 8 random hex chars so
+    // multiple users (or multiple spawns by the same user) in the shared
+    // run9 org never collide on the box name.
+    let box_name = args.name.as_deref().map(|prefix| {
+        format!("{}-{}", prefix, random_hex(4))
+    });
 
     elog(format!("[claude9] creating box (shape={})", shape));
-    let created = run9::box_create_from_snap(args.name.as_deref(), &snap_id, &shape, &labels)?;
+    let created = run9::box_create_from_snap(box_name.as_deref(), &snap_id, &shape, &labels)?;
     let box_id = extract_box_id(&created)?;
     elog(format!("[claude9] box created: {}", box_id));
 
@@ -450,6 +460,17 @@ fn build_claude_flags(opts: &ClaudeOptions) -> String {
 fn shell_single_quote(s: &str) -> String {
     let escaped = s.replace('\'', "'\\''");
     format!("'{}'", escaped)
+}
+
+/// Return `n` random bytes formatted as 2*n lowercase hex chars.
+/// Reads from `/dev/urandom` — no extra deps needed.
+fn random_hex(n: usize) -> String {
+    use std::io::Read;
+    let mut buf = vec![0u8; n];
+    if let Ok(mut f) = std::fs::File::open("/dev/urandom") {
+        let _ = f.read_exact(&mut buf);
+    }
+    buf.iter().map(|b| format!("{:02x}", b)).collect()
 }
 
 // ────────────────────────────────────────────────────────────────────────

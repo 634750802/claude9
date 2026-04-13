@@ -48,6 +48,8 @@ pub fn box_create_from_snap(
     args.push(snap_id.into());
     args.push("--shape".into());
     args.push(shape.into());
+    args.push("--description".into());
+    args.push("Managed by claude9. Do not operate on this box directly.".into());
     for (k, v) in labels {
         args.push("--label".into());
         args.push(format!("{}={}", k, v));
