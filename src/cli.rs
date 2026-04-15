@@ -109,6 +109,11 @@ pub struct TalkArgs {
     /// When spawning a new box, pass this through to `claude9 spawn --desc`
     #[arg(long)]
     pub desc: Option<String>,
+
+    /// Override box shape from config when spawning a new box
+    /// (ignored when reusing an existing box, which can't be resized)
+    #[arg(long)]
+    pub shape: Option<String>,
 }
 
 #[derive(Args)]

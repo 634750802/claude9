@@ -193,7 +193,7 @@ run9 gets the terminal directly, so the experience matches running
 claude9 talk [--name <prefix>]
              [--first-prompt <text> | --first-prompt-file <path>]
              [--model <MODEL>] [--effort <LEVEL>]
-             [--desc <purpose>]
+             [--desc <purpose>] [--shape <SHAPE>]
 ```
 
 - `--name` — optional prefix used to look up `.claude9/state/<prefix>-*`.
@@ -241,6 +241,38 @@ claude9 bash                               # interactive shell on base box
 claude9 bash db9-a1b2c3d4                  # interactive shell on a spawned box
 claude9 bash -- -lc 'ls /home/guy/workspace/repos'
 ```
+
+## Choosing a shape
+
+Every box-spawning command (`spawn`, `talk`) accepts `--shape <SHAPE>` to
+override `defaults.shape` from config.toml. Shape strings are run9's
+`<cores>c<mem-gb>g` format (e.g. `8c16g` = 8 vCPU / 16 GB RAM).
+
+run9 supports exactly four shapes. Pick by workload, not by habit —
+you're billed on the box while it runs:
+
+| Shape    | Good for                                                                 |
+| -------- | ------------------------------------------------------------------------ |
+| `1c2g`   | Minimal — doc-only Q&A, README reading, trivial one-shot edits.          |
+| `2c4g`   | Light navigation / editing across a small repo. No builds.               |
+| `4c8g`   | Typical single-service work with incremental `cargo check` / `pnpm test`. |
+| `8c16g`  | **Default + ceiling.** Large monorepos, parallel test suites, heavy language-server workloads. |
+
+Rules of thumb:
+
+- **Start smaller.** Most `task` / `talk` work fits comfortably at
+  `4c8g`; `8c16g` is the escape hatch for builds / tests that actually
+  need it, not a "just in case" default.
+- **`--shape` on `talk` is honored only when spawning.** If the prefix
+  matches an existing box, the shape flag is ignored with a warning —
+  run9 can't resize a running box. Pass a different `--name` (or none)
+  to spawn fresh at the new size.
+- **Per-project default beats per-invocation flag.** For repeat work in
+  the same group, bump `[defaults].shape` in `.claude9/config.toml`
+  instead of typing `--shape` every time.
+- **Nothing bigger than `8c16g` is available.** If a workload genuinely
+  needs more, do it outside a claude9 box — claude9 is for dev-box
+  tasks, not compute farms.
 
 ## Task history (`.claude9/state/<box-id>/history.jsonl`)
 

@@ -257,7 +257,9 @@ pub fn talk(args: TalkArgs) -> Result<()> {
     )?;
 
     let box_id = match args.name.as_deref() {
-        Some(prefix) => pick_or_spawn_box(prefix, args.desc.as_deref())?,
+        Some(prefix) => {
+            pick_or_spawn_box(prefix, args.desc.as_deref(), args.shape.as_deref())?
+        }
         // No --name: always spawn fresh, let run9 auto-allocate the name
         // (same behavior as `claude9 spawn` with no --name).
         None => {
@@ -269,7 +271,7 @@ pub fn talk(args: TalkArgs) -> Result<()> {
                 task_file: None,
                 no_update: false,
                 base_box: None,
-                shape: None,
+                shape: args.shape.clone(),
             })?
         }
     };
@@ -513,7 +515,11 @@ fn run_claude_interactive(
 /// - 1 match → use it.
 /// - N matches → list them with created_at + last activity + last prompt
 ///   snippet, prompt the user for a 1-based index on stdin.
-fn pick_or_spawn_box(prefix: &str, desc: Option<&str>) -> Result<String> {
+fn pick_or_spawn_box(
+    prefix: &str,
+    desc: Option<&str>,
+    shape: Option<&str>,
+) -> Result<String> {
     let ids = state::list_box_ids_by_prefix(prefix)?;
 
     if ids.is_empty() {
@@ -521,7 +527,17 @@ fn pick_or_spawn_box(prefix: &str, desc: Option<&str>) -> Result<String> {
             "[claude9] no box matches prefix '{}-*'; spawning a new one",
             prefix
         ));
-        return spawn_for_interactive(prefix, desc);
+        return spawn_for_interactive(prefix, desc, shape);
+    }
+
+    // Warn if the user passed --shape but we're reusing an existing
+    // box. Can't resize run9 boxes in place, so the flag is silently
+    // no-op otherwise — better to surface it.
+    if shape.is_some() {
+        elog(
+            "[claude9] --shape ignored: reusing an existing box, which cannot \
+             be resized. Pass a different --name (or none) to spawn fresh.",
+        );
     }
 
     // Gather metadata for sorting / display.
@@ -645,7 +661,11 @@ fn prompt_index_stdin(n: usize) -> Result<usize> {
 /// Spawn a fresh box for `claude9 talk` when no existing one matches
 /// the prefix. Mirrors `spawn()` but skips the optional task hook —
 /// the talk session is the task.
-fn spawn_for_interactive(prefix: &str, desc: Option<&str>) -> Result<String> {
+fn spawn_for_interactive(
+    prefix: &str,
+    desc: Option<&str>,
+    shape: Option<&str>,
+) -> Result<String> {
     spawn(SpawnArgs {
         name: Some(prefix.to_string()),
         desc: desc.map(|s| s.to_string()),
@@ -653,7 +673,7 @@ fn spawn_for_interactive(prefix: &str, desc: Option<&str>) -> Result<String> {
         task_file: None,
         no_update: false,
         base_box: None,
-        shape: None,
+        shape: shape.map(|s| s.to_string()),
     })
 }
 
