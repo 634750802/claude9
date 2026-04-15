@@ -16,13 +16,16 @@ Reach for `claude9` when the user wants to:
 - Spin up a **fresh remote dev box** with a known set of repos already cloned.
 - Fire a **one-shot `claude -p` task** against that box and see it stream live.
 - **Resume a previous claude session** on a specific box by id.
+- Drop into an **interactive claude session** on a named box (spawn-or-reuse)
+  with a seed prompt.
 - Work on multiple **project groups** on one machine — each project tree has
   its own `.claude9/config.toml` and `.claude9/state/` and they stay isolated.
 
 Do **not** use `claude9` for:
 
 - Running claude locally (just call `claude` directly).
-- General box management — it only does `spawn` / `task` / `resume` / `config`.
+- General box management — it only does
+  `spawn` / `task` / `resume` / `interactive` / `config`.
   No `ls`, `stop`, `rm`, `attach`. Use `run9` directly for those.
 
 ## Concepts
@@ -173,6 +176,57 @@ Claude's `--resume` reuses the same session id by default, so
 `session.txt` effectively stays put across resumes (unless `--fork-session`
 is ever added).
 
+### `claude9 interactive [OPTIONS]`
+
+Find-or-spawn a box, then hand a TTY over to an interactive `claude`
+session running inside it. claude9 does not intercept stdout / stderr —
+run9 gets the terminal directly, so the experience matches running
+`claude` locally.
+
+```
+claude9 interactive [--name <prefix>]
+                    [--first-prompt <text> | --first-prompt-file <path>]
+                    [--model <MODEL>] [--effort <LEVEL>]
+                    [--desc <purpose>]
+```
+
+- `--name` — optional prefix used to look up `.claude9/state/<prefix>-*`.
+  0 matches → spawn a fresh box with that prefix (same flow as
+  `claude9 spawn --name`). 1 match → reuse it. >1 matches → prompt on
+  stdin to pick by index, listing each box with `created_at` + last
+  activity + last-prompt snippet. Omit entirely to always spawn a fresh
+  auto-named box (e.g. `plum-ant`), no reuse — good for one-off sessions.
+- `--first-prompt` / `--first-prompt-file` — seed the session with an
+  initial user message. Passed to `claude` as its positional arg, so no
+  shell-escaping needed on your side. Omit for a blank interactive start.
+- `--model` / `--effort` — per-invocation override of `[claude].model` and
+  `[claude].effort`, same shape as the spawn-time `--base-box` / `--shape`.
+- `--desc` — only used when spawning a new box; mirrors
+  `claude9 spawn --desc` and sets the `claude9-task` label.
+
+Interactive sessions do **not** get persisted to `session.txt` (claude9
+doesn't read the stream). If you want to later `claude9 resume` against
+the same conversation, use `task` / `resume` instead — those are the
+session-managed surface.
+
+```sh
+claude9 interactive --name db9 --first-prompt-file primer.md
+```
+
+## Task history (`.claude9/state/<box-id>/history.jsonl`)
+
+Every `task` / `resume` / `interactive` invocation appends one JSONL line
+to `history.jsonl` alongside the box's other state:
+
+```json
+{"ts":"...","kind":"task","prompt_snippet":"...","session_id":"..."}
+```
+
+`interactive` entries have no `session_id` (we don't see the stream) and
+their `prompt_snippet` is the seed prompt, possibly empty. The
+interactive picker uses the newest entry to show each box's last
+activity when multiple boxes match a prefix.
+
 ## Typical workflows
 
 ### First-time setup in a new project group
@@ -205,6 +259,21 @@ claude9 spawn --name quick --no-update
 CLAUDE9_BASE_SNAP_ID=svabcd1234 claude9 spawn --name db9
 ```
 
+### Interactive topic-box with a primer
+
+```sh
+cat > /tmp/primer.md <<'EOF'
+We're investigating slow cold-start on db9-server. See context doc at ...
+Open questions: 1) ... 2) ...
+EOF
+
+# First run spawns `db9topic-xxxxxxxx` because nothing matches the prefix.
+claude9 interactive --name db9topic --first-prompt-file /tmp/primer.md
+
+# Later, back in the same project dir, the same command reuses the box.
+claude9 interactive --name db9topic --first-prompt "follow up question"
+```
+
 ## Layout
 
 Created by `claude9` in the project tree:
@@ -214,8 +283,9 @@ Created by `claude9` in the project tree:
 ├── config.toml
 └── state/
     └── <box-id>/
-        ├── meta.toml     # box_id, base_box, snap_id, shape, created_at, projects[]
-        └── session.txt   # last claude session id
+        ├── meta.toml      # box_id, base_box, snap_id, shape, created_at, projects[]
+        ├── session.txt    # last claude session id (from task / resume)
+        └── history.jsonl  # append-only log of task / resume / interactive invocations
 ```
 
 Hard-coded inside the remote box (contract with the base snap):
@@ -264,9 +334,12 @@ project groups stay isolated just by living in different directory trees.
 
 Not yet implemented, don't suggest these as if they work:
 
-- `claude9 ls` / `stop` / `rm` / `attach` / `doctor`
+- `claude9 ls` / `stop` / `rm` / `doctor`
 - Parallel repo sync
-- Long-running remote-control claude sessions (only one-shot `claude -p`)
+- Remote-control / streaming of interactive sessions (`interactive` hands
+  off to `run9 box exec -it` and doesn't intercept the stream)
+- Persisting interactive session ids so `claude9 resume` can follow them
+  (resume only follows prior `task` / `resume` turns)
 - Managing `memory/` / `knowledges/` / `notes/` inside the box's workspace
 - Automatically provisioning the base box — see the **Base box contract**
   section for what you set up manually once, before using `claude9` at all

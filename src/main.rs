@@ -12,8 +12,9 @@ fn main() -> Result<()> {
     let cli = cli::Cli::parse();
     match cli.command {
         cli::Command::Config => commands::config_cmd(),
-        cli::Command::Spawn(args) => commands::spawn(args),
+        cli::Command::Spawn(args) => commands::spawn(args).map(|_| ()),
         cli::Command::Task(args) => commands::task(args),
         cli::Command::Resume(args) => commands::resume(args),
+        cli::Command::Interactive(args) => commands::interactive(args),
     }
 }

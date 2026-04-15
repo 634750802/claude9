@@ -9,7 +9,7 @@ use std::path::Path;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::cli::{ResumeArgs, SpawnArgs, TaskArgs};
+use crate::cli::{InteractiveArgs, ResumeArgs, SpawnArgs, TaskArgs};
 use crate::config::{self, ClaudeOptions, REMOTE_USER, REPOS_DIR, WORKSPACE};
 use crate::resolver;
 use crate::run9;
@@ -64,7 +64,7 @@ pub fn config_cmd() -> Result<()> {
     Ok(())
 }
 
-pub fn spawn(args: SpawnArgs) -> Result<()> {
+pub fn spawn(args: SpawnArgs) -> Result<String> {
     let cfg = config::load()?;
     let base_box = args
         .base_box
@@ -189,7 +189,7 @@ fi
 
     let next_cmd = if prompt.is_some() { "resume" } else { "task" };
     elog(format!("[claude9] next: claude9 {} {} \"<prompt>\"", next_cmd, box_id));
-    Ok(())
+    Ok(box_id)
 }
 
 pub fn task(args: TaskArgs) -> Result<()> {
@@ -205,6 +205,43 @@ pub fn resume(args: ResumeArgs) -> Result<()> {
     let prompt = resolve_prompt(join_opt(&args.prompt), args.file.as_deref())?
         .ok_or_else(|| anyhow!("no follow-up given (positional args or -f FILE)"))?;
     run_claude_task(&args.box_id, &prompt, Some(&session), &cfg.claude)
+}
+
+pub fn interactive(args: InteractiveArgs) -> Result<()> {
+    let mut cfg = config::load()?;
+    // Per-invocation CLI overrides for model / effort, same pattern as
+    // spawn's --base-box / --shape.
+    if args.model.is_some() {
+        cfg.claude.model = args.model.clone();
+    }
+    if args.effort.is_some() {
+        cfg.claude.effort = args.effort.clone();
+    }
+
+    let first_prompt = resolve_prompt(
+        args.first_prompt.clone(),
+        args.first_prompt_file.as_deref(),
+    )?;
+
+    let box_id = match args.name.as_deref() {
+        Some(prefix) => pick_or_spawn_box(prefix, args.desc.as_deref())?,
+        // No --name: always spawn fresh, let run9 auto-allocate the name
+        // (same behavior as `claude9 spawn` with no --name).
+        None => {
+            elog("[claude9] no --name given; spawning a fresh auto-named box");
+            spawn(SpawnArgs {
+                name: None,
+                desc: args.desc.clone(),
+                task: None,
+                task_file: None,
+                no_update: false,
+                base_box: None,
+                shape: None,
+            })?
+        }
+    };
+
+    run_claude_interactive(&box_id, first_prompt.as_deref(), &cfg.claude)
 }
 
 fn join_opt(parts: &[String]) -> Option<String> {
@@ -388,7 +425,203 @@ fn run_claude_task(
         );
     }
 
+    // Record the invocation so the interactive picker can show recent
+    // activity on a box. Best-effort — a history write failure shouldn't
+    // flip an otherwise-successful task to a non-zero exit.
+    let kind = if resume_session.is_some() { "resume" } else { "task" };
+    if let Err(e) = state::append_history(box_id, kind, prompt, stream.session_id.as_deref()) {
+        elog(format!("[claude9] warn: history write failed: {}", e));
+    }
+
     Ok(())
+}
+
+/// Hand a TTY over to an interactive `claude` inside the box. We never
+/// intercept stdout/stderr here — `box_exec_interactive` wires inherit
+/// everywhere so the terminal experience matches running `claude`
+/// locally. `--resume` is intentionally *not* passed: interactive mode
+/// starts a fresh session. The seed prompt is passed as `$0` to bash so
+/// no shell-escaping is needed on the caller side.
+fn run_claude_interactive(
+    box_id: &str,
+    first_prompt: Option<&str>,
+    claude_opts: &ClaudeOptions,
+) -> Result<()> {
+    let flags = build_claude_flags(claude_opts);
+
+    // `claude <flags> "$0"` — $0 is the seed prompt (or empty if none).
+    // When empty, claude sees no positional arg and launches into the
+    // normal interactive REPL.
+    let inner = format!(r#"claude{} "$0""#, flags);
+    let seed = first_prompt.unwrap_or("");
+
+    elog(format!("[claude9] interactive -> {}", box_id));
+    if let Err(e) = state::append_history(box_id, "interactive", seed, None) {
+        elog(format!("[claude9] warn: history write failed: {}", e));
+    }
+
+    let status = run9::box_exec_interactive(
+        box_id,
+        REMOTE_USER,
+        WORKSPACE,
+        &["/bin/bash", "-lc", &inner, seed],
+    )?;
+    if !status.success() {
+        bail!(
+            "interactive session exited non-zero (code {})",
+            status.code().unwrap_or(-1)
+        );
+    }
+    Ok(())
+}
+
+/// Look up boxes whose id starts with `<prefix>-` under `.claude9/state/`.
+/// - 0 matches → spawn a fresh box with this prefix (same as `claude9 spawn --name`).
+/// - 1 match → use it.
+/// - N matches → list them with created_at + last activity + last prompt
+///   snippet, prompt the user for a 1-based index on stdin.
+fn pick_or_spawn_box(prefix: &str, desc: Option<&str>) -> Result<String> {
+    let ids = state::list_box_ids_by_prefix(prefix)?;
+
+    if ids.is_empty() {
+        elog(format!(
+            "[claude9] no box matches prefix '{}-*'; spawning a new one",
+            prefix
+        ));
+        return spawn_for_interactive(prefix, desc);
+    }
+
+    // Gather metadata for sorting / display.
+    let mut infos: Vec<BoxPickInfo> = ids
+        .into_iter()
+        .map(|id| BoxPickInfo::load(&id))
+        .collect();
+    // Newest-first by created_at; unknown dates sort last.
+    infos.sort_by(|a, b| b.sort_key().cmp(&a.sort_key()));
+
+    if infos.len() == 1 {
+        let id = infos.into_iter().next().unwrap().box_id;
+        elog(format!("[claude9] reusing box {}", id));
+        return Ok(id);
+    }
+
+    elog(format!(
+        "[claude9] {} boxes match prefix '{}-*':",
+        infos.len(),
+        prefix
+    ));
+    for (i, info) in infos.iter().enumerate() {
+        elog(format!("  [{}] {}", i + 1, info.display_line()));
+    }
+    let n = infos.len();
+    let choice = prompt_index_stdin(n)?;
+    Ok(infos.into_iter().nth(choice - 1).unwrap().box_id)
+}
+
+/// Summary row for the interactive picker. `created_at` comes from
+/// `meta.toml`; `last_activity` / `last_prompt` come from the newest
+/// `history.jsonl` entry. Any of these can be missing (old box dirs
+/// without meta, boxes that were never `task`'d).
+struct BoxPickInfo {
+    box_id: String,
+    created_at: Option<chrono::DateTime<Utc>>,
+    last_activity: Option<chrono::DateTime<Utc>>,
+    last_kind: Option<String>,
+    last_prompt: Option<String>,
+}
+
+impl BoxPickInfo {
+    fn load(box_id: &str) -> Self {
+        let meta = state::load_meta(box_id).ok();
+        let history = state::load_history(box_id).unwrap_or_default();
+        let last = history.last().cloned();
+        BoxPickInfo {
+            box_id: box_id.to_string(),
+            created_at: meta.map(|m| m.created_at),
+            last_activity: last.as_ref().map(|e| e.ts),
+            last_kind: last.as_ref().map(|e| e.kind.clone()),
+            last_prompt: last.as_ref().map(|e| e.prompt_snippet.clone()),
+        }
+    }
+
+    fn sort_key(&self) -> chrono::DateTime<Utc> {
+        // Prefer last activity; fall back to creation time; fall back
+        // to epoch so unknown rows bubble to the bottom.
+        self.last_activity
+            .or(self.created_at)
+            .unwrap_or_else(|| chrono::DateTime::<Utc>::from_timestamp(0, 0).unwrap())
+    }
+
+    fn display_line(&self) -> String {
+        let created = self
+            .created_at
+            .map(|t| t.with_timezone(&Local).format("%Y-%m-%d %H:%M").to_string())
+            .unwrap_or_else(|| "?".into());
+        let last = match (self.last_activity, self.last_kind.as_deref()) {
+            (Some(t), Some(kind)) => format!(
+                "last {} @ {}",
+                kind,
+                t.with_timezone(&Local).format("%Y-%m-%d %H:%M")
+            ),
+            _ => "no activity".into(),
+        };
+        let prompt = self
+            .last_prompt
+            .as_deref()
+            .map(|p| truncate(&p.replace('\n', " "), 60))
+            .unwrap_or_default();
+        if prompt.is_empty() {
+            format!("{}  (created {}, {})", self.box_id, created, last)
+        } else {
+            format!(
+                "{}  (created {}, {})\n             ↳ {}",
+                self.box_id, created, last, prompt
+            )
+        }
+    }
+}
+
+/// Read a 1-based index from stdin. Loops until the user enters a valid
+/// number in `[1, n]` — blank / non-numeric / out-of-range re-prompts
+/// rather than crashing the command.
+fn prompt_index_stdin(n: usize) -> Result<usize> {
+    use std::io::{BufRead, Write};
+    let stdin = std::io::stdin();
+    let mut stdout = std::io::stdout();
+    loop {
+        eprint!("[claude9] pick [1-{}]: ", n);
+        stdout.flush().ok();
+        let mut line = String::new();
+        stdin
+            .lock()
+            .read_line(&mut line)
+            .context("reading stdin")?;
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        match trimmed.parse::<usize>() {
+            Ok(i) if (1..=n).contains(&i) => return Ok(i),
+            _ => {
+                elog(format!("[claude9] '{}' is not in 1..={}", trimmed, n));
+            }
+        }
+    }
+}
+
+/// Spawn a fresh box for `claude9 interactive` when no existing one
+/// matches the prefix. Mirrors `spawn()` but skips the optional task
+/// hook — the interactive session is the task.
+fn spawn_for_interactive(prefix: &str, desc: Option<&str>) -> Result<String> {
+    spawn(SpawnArgs {
+        name: Some(prefix.to_string()),
+        desc: desc.map(|s| s.to_string()),
+        task: None,
+        task_file: None,
+        no_update: false,
+        base_box: None,
+        shape: None,
+    })
 }
 
 fn wait_for_ready(box_id: &str, timeout: Duration) -> Result<()> {

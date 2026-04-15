@@ -22,6 +22,8 @@ pub enum Command {
     Task(TaskArgs),
     /// Resume the last saved claude session on a box with a follow-up
     Resume(ResumeArgs),
+    /// Spawn-or-reuse a named box and drop into an interactive claude session
+    Interactive(InteractiveArgs),
 }
 
 #[derive(Args)]
@@ -67,6 +69,33 @@ pub struct TaskArgs {
     /// Read prompt from file instead of positional args
     #[arg(short, long)]
     pub file: Option<PathBuf>,
+}
+
+#[derive(Args)]
+pub struct InteractiveArgs {
+    /// Name prefix for the box: reuse an existing `<prefix>-*` or spawn fresh
+    #[arg(long)]
+    pub name: Option<String>,
+
+    /// Seed the interactive session with a first user message
+    #[arg(long = "first-prompt")]
+    pub first_prompt: Option<String>,
+
+    /// Read the first prompt from a file
+    #[arg(long = "first-prompt-file")]
+    pub first_prompt_file: Option<PathBuf>,
+
+    /// Override `[claude].model` for this session
+    #[arg(long)]
+    pub model: Option<String>,
+
+    /// Override `[claude].effort` for this session
+    #[arg(long)]
+    pub effort: Option<String>,
+
+    /// When spawning a new box, pass this through to `claude9 spawn --desc`
+    #[arg(long)]
+    pub desc: Option<String>,
 }
 
 #[derive(Args)]

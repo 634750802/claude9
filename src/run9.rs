@@ -2,7 +2,7 @@ use anyhow::{bail, Context, Result};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read};
-use std::process::{Command, Stdio};
+use std::process::{Command, ExitStatus, Stdio};
 use std::thread;
 
 fn run_raw(args: &[String]) -> Result<(String, String)> {
@@ -168,4 +168,40 @@ where
         stdout: stdout_buf,
         stderr,
     })
+}
+
+/// Run a command inside a box via `run9 box exec -it`, letting the child
+/// process inherit our stdin/stdout/stderr. Used to hand a real terminal
+/// over to an interactive `claude` session — claude9 doesn't touch the
+/// stream at all, just forwards our TTY down to run9 and returns whatever
+/// exit status the remote process surfaces.
+pub fn box_exec_interactive(
+    box_id: &str,
+    user: &str,
+    workdir: &str,
+    command: &[&str],
+) -> Result<ExitStatus> {
+    let mut args: Vec<String> = vec![
+        "box".into(),
+        "exec".into(),
+        box_id.into(),
+        "-it".into(),
+        "--user".into(),
+        user.into(),
+        "--workdir".into(),
+        workdir.into(),
+        "--".into(),
+    ];
+    for c in command {
+        args.push((*c).into());
+    }
+
+    let status = Command::new("run9")
+        .args(&args)
+        .stdin(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .status()
+        .context("failed to spawn run9; is it on PATH?")?;
+    Ok(status)
 }
