@@ -15,7 +15,7 @@ fn main() -> Result<()> {
         cli::Command::Spawn(args) => commands::spawn(args).map(|_| ()),
         cli::Command::Task(args) => commands::task(args),
         cli::Command::Resume(args) => commands::resume(args),
-        cli::Command::Interactive(args) => commands::interactive(args),
+        cli::Command::Talk(args) => commands::talk(args),
         cli::Command::Bash(args) => commands::bash(args),
     }
 }

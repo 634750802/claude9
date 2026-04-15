@@ -56,19 +56,19 @@ pub fn load_meta(box_id: &str) -> Result<BoxMeta> {
 }
 
 /// One user-triggered invocation against a box. Appended to
-/// `.claude9/state/<box-id>/history.jsonl` so `interactive` can show a
+/// `.claude9/state/<box-id>/history.jsonl` so `talk` can show a
 /// "last activity" hint when multiple boxes match a prefix, and so the
 /// user has a local record of what they've asked on each box.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct HistoryEntry {
     pub ts: DateTime<Utc>,
-    /// `task` | `resume` | `interactive`.
+    /// `task` | `resume` | `talk`.
     pub kind: String,
     /// First ~200 chars of the prompt — enough to recognize the topic
     /// without the file ballooning on long seed documents.
     pub prompt_snippet: String,
     /// Claude's session id when known (one-shot task / resume). Absent
-    /// for `interactive` since we don't intercept the stream.
+    /// for `talk` since we don't intercept the stream.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
 }

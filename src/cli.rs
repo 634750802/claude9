@@ -23,7 +23,7 @@ pub enum Command {
     /// Resume the last saved claude session on a box with a follow-up
     Resume(ResumeArgs),
     /// Spawn-or-reuse a named box and drop into an interactive claude session
-    Interactive(InteractiveArgs),
+    Talk(TalkArgs),
     /// Drop into `/bin/bash` on a run9 box (defaults to the configured base box)
     Bash(BashArgs),
 }
@@ -85,7 +85,7 @@ pub struct BashArgs {
 }
 
 #[derive(Args)]
-pub struct InteractiveArgs {
+pub struct TalkArgs {
     /// Name prefix for the box: reuse an existing `<prefix>-*` or spawn fresh
     #[arg(long)]
     pub name: Option<String>,

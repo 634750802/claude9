@@ -9,7 +9,7 @@ use std::path::Path;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::cli::{BashArgs, InteractiveArgs, ResumeArgs, SpawnArgs, TaskArgs};
+use crate::cli::{BashArgs, ResumeArgs, SpawnArgs, TalkArgs, TaskArgs};
 use crate::config::{self, ClaudeOptions, REMOTE_USER, REPOS_DIR, WORKSPACE};
 use crate::resolver;
 use crate::run9;
@@ -240,7 +240,7 @@ pub fn bash(args: BashArgs) -> Result<()> {
     Ok(())
 }
 
-pub fn interactive(args: InteractiveArgs) -> Result<()> {
+pub fn talk(args: TalkArgs) -> Result<()> {
     let mut cfg = config::load()?;
     // Per-invocation CLI overrides for model / effort, same pattern as
     // spawn's --base-box / --shape.
@@ -488,8 +488,8 @@ fn run_claude_interactive(
     let inner = format!(r#"claude{} "$0""#, flags);
     let seed = first_prompt.unwrap_or("");
 
-    elog(format!("[claude9] interactive -> {}", box_id));
-    if let Err(e) = state::append_history(box_id, "interactive", seed, None) {
+    elog(format!("[claude9] talk -> {}", box_id));
+    if let Err(e) = state::append_history(box_id, "talk", seed, None) {
         elog(format!("[claude9] warn: history write failed: {}", e));
     }
 
@@ -642,9 +642,9 @@ fn prompt_index_stdin(n: usize) -> Result<usize> {
     }
 }
 
-/// Spawn a fresh box for `claude9 interactive` when no existing one
-/// matches the prefix. Mirrors `spawn()` but skips the optional task
-/// hook — the interactive session is the task.
+/// Spawn a fresh box for `claude9 talk` when no existing one matches
+/// the prefix. Mirrors `spawn()` but skips the optional task hook —
+/// the talk session is the task.
 fn spawn_for_interactive(prefix: &str, desc: Option<&str>) -> Result<String> {
     spawn(SpawnArgs {
         name: Some(prefix.to_string()),

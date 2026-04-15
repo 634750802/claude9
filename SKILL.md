@@ -16,8 +16,8 @@ Reach for `claude9` when the user wants to:
 - Spin up a **fresh remote dev box** with a known set of repos already cloned.
 - Fire a **one-shot `claude -p` task** against that box and see it stream live.
 - **Resume a previous claude session** on a specific box by id.
-- Drop into an **interactive claude session** on a named box (spawn-or-reuse)
-  with a seed prompt.
+- Drop into a **live claude session** on a named box (spawn-or-reuse) with
+  a seed prompt.
 - Work on multiple **project groups** on one machine — each project tree has
   its own `.claude9/config.toml` and `.claude9/state/` and they stay isolated.
 
@@ -25,7 +25,7 @@ Do **not** use `claude9` for:
 
 - Running claude locally (just call `claude` directly).
 - General box management — it only does
-  `spawn` / `task` / `resume` / `interactive` / `bash` / `config`.
+  `spawn` / `task` / `resume` / `talk` / `bash` / `config`.
   No `ls`, `stop`, `rm`, `attach`. Use `run9` directly for those.
 
 ## Concepts
@@ -182,7 +182,7 @@ Claude's `--resume` reuses the same session id by default, so
 `session.txt` effectively stays put across resumes (unless `--fork-session`
 is ever added).
 
-### `claude9 interactive [OPTIONS]`
+### `claude9 talk [OPTIONS]`
 
 Find-or-spawn a box, then hand a TTY over to an interactive `claude`
 session running inside it. claude9 does not intercept stdout / stderr —
@@ -190,10 +190,10 @@ run9 gets the terminal directly, so the experience matches running
 `claude` locally.
 
 ```
-claude9 interactive [--name <prefix>]
-                    [--first-prompt <text> | --first-prompt-file <path>]
-                    [--model <MODEL>] [--effort <LEVEL>]
-                    [--desc <purpose>]
+claude9 talk [--name <prefix>]
+             [--first-prompt <text> | --first-prompt-file <path>]
+             [--model <MODEL>] [--effort <LEVEL>]
+             [--desc <purpose>]
 ```
 
 - `--name` — optional prefix used to look up `.claude9/state/<prefix>-*`.
@@ -210,13 +210,13 @@ claude9 interactive [--name <prefix>]
 - `--desc` — only used when spawning a new box; mirrors
   `claude9 spawn --desc` and sets the `claude9-task` label.
 
-Interactive sessions do **not** get persisted to `session.txt` (claude9
-doesn't read the stream). If you want to later `claude9 resume` against
-the same conversation, use `task` / `resume` instead — those are the
+Talk sessions do **not** get persisted to `session.txt` (claude9 doesn't
+read the stream). If you want to later `claude9 resume` against the
+same conversation, use `task` / `resume` instead — those are the
 session-managed surface.
 
 ```sh
-claude9 interactive --name db9 --first-prompt-file primer.md
+claude9 talk --name db9 --first-prompt-file primer.md
 ```
 
 ### `claude9 bash [BOX] [-- BASH_ARGS...]`
@@ -233,7 +233,7 @@ or for jumping onto any run9 box without memorizing the `run9` incantation.
   while bare `claude9 bash` drops into an interactive shell.
 
 `user` and `workdir` are **fixed** to `guy` / `/home/guy/workspace` —
-the same remote contract `task` / `resume` / `interactive` already use.
+the same remote contract `task` / `resume` / `talk` already use.
 If you need root, escalate from inside the shell.
 
 ```sh
@@ -244,17 +244,17 @@ claude9 bash -- -lc 'ls /home/guy/workspace/repos'
 
 ## Task history (`.claude9/state/<box-id>/history.jsonl`)
 
-Every `task` / `resume` / `interactive` invocation appends one JSONL line
-to `history.jsonl` alongside the box's other state:
+Every `task` / `resume` / `talk` invocation appends one JSONL line to
+`history.jsonl` alongside the box's other state:
 
 ```json
 {"ts":"...","kind":"task","prompt_snippet":"...","session_id":"..."}
 ```
 
-`interactive` entries have no `session_id` (we don't see the stream) and
-their `prompt_snippet` is the seed prompt, possibly empty. The
-interactive picker uses the newest entry to show each box's last
-activity when multiple boxes match a prefix.
+`talk` entries have no `session_id` (we don't see the stream) and their
+`prompt_snippet` is the seed prompt, possibly empty. The `talk` picker
+uses the newest entry to show each box's last activity when multiple
+boxes match a prefix.
 
 ## Typical workflows
 
@@ -288,7 +288,7 @@ claude9 spawn --name quick --no-update
 CLAUDE9_BASE_SNAP_ID=svabcd1234 claude9 spawn --name db9
 ```
 
-### Interactive topic-box with a primer
+### Topic-box with a primer (`claude9 talk`)
 
 ```sh
 cat > /tmp/primer.md <<'EOF'
@@ -297,10 +297,10 @@ Open questions: 1) ... 2) ...
 EOF
 
 # First run spawns `db9topic-xxxxxxxx` because nothing matches the prefix.
-claude9 interactive --name db9topic --first-prompt-file /tmp/primer.md
+claude9 talk --name db9topic --first-prompt-file /tmp/primer.md
 
 # Later, back in the same project dir, the same command reuses the box.
-claude9 interactive --name db9topic --first-prompt "follow up question"
+claude9 talk --name db9topic --first-prompt "follow up question"
 ```
 
 ## Layout
@@ -314,7 +314,7 @@ Created by `claude9` in the project tree:
     └── <box-id>/
         ├── meta.toml      # box_id, base_box, snap_id, shape, created_at, projects[]
         ├── session.txt    # last claude session id (from task / resume)
-        └── history.jsonl  # append-only log of task / resume / interactive invocations
+        └── history.jsonl  # append-only log of task / resume / talk invocations
 ```
 
 Hard-coded inside the remote box (contract with the base snap):
@@ -365,9 +365,9 @@ Not yet implemented, don't suggest these as if they work:
 
 - `claude9 ls` / `stop` / `rm` / `doctor`
 - Parallel repo sync
-- Remote-control / streaming of interactive sessions (`interactive` hands
-  off to `run9 box exec -it` and doesn't intercept the stream)
-- Persisting interactive session ids so `claude9 resume` can follow them
+- Remote-control / streaming of talk sessions (`talk` hands off to
+  `run9 box exec -it` and doesn't intercept the stream)
+- Persisting talk session ids so `claude9 resume` can follow them
   (resume only follows prior `task` / `resume` turns)
 - Managing `memory/` / `knowledges/` / `notes/` inside the box's workspace
 - Automatically provisioning the base box — see the **Base box contract**
