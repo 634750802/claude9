@@ -1,8 +1,6 @@
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{Local, Utc};
-use claude_codes::{
-    ClaudeOutput, ContentBlock, ToolResultBlock, ToolResultContent, ToolUseBlock,
-};
+use claude_codes::{ClaudeOutput, ContentBlock, ToolResultBlock, ToolResultContent, ToolUseBlock};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::Path;
@@ -23,11 +21,7 @@ const TS_PAD: &str = "           "; // 11 spaces == "[HH:MM:SS] ".len()
 /// Timestamped log line on stderr. Everything that's not the assistant's
 /// result text goes through here, so the user can pipe stdout cleanly.
 fn elog(msg: impl AsRef<str>) {
-    eprintln!(
-        "[{}] {}",
-        Local::now().format("%H:%M:%S"),
-        msg.as_ref()
-    );
+    eprintln!("[{}] {}", Local::now().format("%H:%M:%S"), msg.as_ref());
 }
 
 /// Continuation line for a multi-line event (tool result body, git
@@ -75,9 +69,11 @@ pub fn spawn(args: SpawnArgs) -> Result<String> {
         .clone()
         .unwrap_or_else(|| cfg.defaults.shape.clone());
 
-    elog(format!("[claude9] resolving base snap from box '{}'", base_box));
+    elog(format!(
+        "[claude9] resolving base snap from box '{base_box}'"
+    ));
     let snap_id = resolver::resolve_base_snap(&base_box)?;
-    elog(format!("[claude9] base snap: {}", snap_id));
+    elog(format!("[claude9] base snap: {snap_id}"));
 
     let whoami = std::env::var("USER").unwrap_or_else(|_| "unknown".into());
     let mut labels: Vec<(&str, &str)> = vec![
@@ -92,14 +88,15 @@ pub fn spawn(args: SpawnArgs) -> Result<String> {
     // When --name is given it's a prefix; append 8 random hex chars so
     // multiple users (or multiple spawns by the same user) in the shared
     // run9 org never collide on the box name.
-    let box_name = args.name.as_deref().map(|prefix| {
-        format!("{}-{}", prefix, random_hex(4))
-    });
+    let box_name = args
+        .name
+        .as_deref()
+        .map(|prefix| format!("{}-{}", prefix, random_hex(4)));
 
-    elog(format!("[claude9] creating box (shape={})", shape));
+    elog(format!("[claude9] creating box (shape={shape})"));
     let created = run9::box_create_from_snap(box_name.as_deref(), &snap_id, &shape, &labels)?;
     let box_id = extract_box_id(&created)?;
-    elog(format!("[claude9] box created: {}", box_id));
+    elog(format!("[claude9] box created: {box_id}"));
 
     wait_for_ready(&box_id, Duration::from_secs(180))?;
     elog("[claude9] box ready");
@@ -110,7 +107,7 @@ pub fn spawn(args: SpawnArgs) -> Result<String> {
         REMOTE_USER,
         WORKSPACE,
         &HashMap::new(),
-        &["/bin/sh", "-lc", &format!("mkdir -p {}", REPOS_DIR)],
+        &["/bin/sh", "-lc", &format!("mkdir -p {REPOS_DIR}")],
     )?;
 
     // Sync repos (serial; v1 doesn't do parallel).
@@ -173,13 +170,13 @@ fi
     state::save_meta(&meta)?;
 
     if !failed.is_empty() {
-        elog(format!("[claude9] repo sync failures: {:?}", failed));
+        elog(format!("[claude9] repo sync failures: {failed:?}"));
     }
 
     // Print box_id early — before the optional task streams its output —
     // so the user (or a wrapping script) can capture it regardless of how
     // much claude output follows.
-    elog(format!("[claude9] box_id={}", box_id));
+    elog(format!("[claude9] box_id={box_id}"));
 
     // Optional inline task.
     let prompt = resolve_prompt(args.task.clone(), args.task_file.as_deref())?;
@@ -188,7 +185,9 @@ fi
     }
 
     let next_cmd = if prompt.is_some() { "resume" } else { "task" };
-    elog(format!("[claude9] next: claude9 {} {} \"<prompt>\"", next_cmd, box_id));
+    elog(format!(
+        "[claude9] next: claude9 {next_cmd} {box_id} \"<prompt>\""
+    ));
     Ok(box_id)
 }
 
@@ -229,7 +228,9 @@ pub fn bash(args: BashArgs) -> Result<()> {
     cmd.extend(args.bash_args.iter().cloned());
     let cmd_refs: Vec<&str> = cmd.iter().map(|s| s.as_str()).collect();
 
-    elog(format!("[claude9] bash -> {} (user={}, workdir={})", target, REMOTE_USER, WORKSPACE));
+    elog(format!(
+        "[claude9] bash -> {target} (user={REMOTE_USER}, workdir={WORKSPACE})"
+    ));
     let status = run9::box_exec_interactive(&target, REMOTE_USER, WORKSPACE, &cmd_refs)?;
     if !status.success() {
         bail!(
@@ -251,15 +252,11 @@ pub fn talk(args: TalkArgs) -> Result<()> {
         cfg.claude.effort = args.effort.clone();
     }
 
-    let first_prompt = resolve_prompt(
-        args.first_prompt.clone(),
-        args.first_prompt_file.as_deref(),
-    )?;
+    let first_prompt =
+        resolve_prompt(args.first_prompt.clone(), args.first_prompt_file.as_deref())?;
 
     let box_id = match args.name.as_deref() {
-        Some(prefix) => {
-            pick_or_spawn_box(prefix, args.desc.as_deref(), args.shape.as_deref())?
-        }
+        Some(prefix) => pick_or_spawn_box(prefix, args.desc.as_deref(), args.shape.as_deref())?,
         // No --name: always spawn fresh, let run9 auto-allocate the name
         // (same behavior as `claude9 spawn` with no --name).
         None => {
@@ -356,7 +353,7 @@ impl ClaudeStreamState {
                 // Assistant text content is the only thing that reaches
                 // stdout — keeps `claude9 task ... > out.md` clean.
                 if let Some(text) = output.text_content() {
-                    println!("{}", text);
+                    println!("{text}");
                 }
                 for tool in output.tool_uses() {
                     let lines = render_tool_use(tool);
@@ -399,7 +396,7 @@ impl ClaudeStreamState {
                 self.final_result = result.result.clone();
             }
             ClaudeOutput::Error(err) => {
-                elog(format!("[claude9] anthropic error: {:?}", err));
+                elog(format!("[claude9] anthropic error: {err:?}"));
             }
             _ => {} // Rate-limit events, control msgs — silent.
         }
@@ -430,11 +427,10 @@ fn run_claude_task(
         .unwrap_or_default();
 
     let cmd = format!(
-        r#"claude -p{}{} --output-format stream-json --verbose "$C9_PROMPT""#,
-        resume_frag, extra_flags,
+        r#"claude -p{resume_frag}{extra_flags} --output-format stream-json --verbose "$C9_PROMPT""#,
     );
 
-    elog(format!("[claude9] running claude -p on {} (stream)", box_id));
+    elog(format!("[claude9] running claude -p on {box_id} (stream)"));
 
     let mut stream = ClaudeStreamState::new();
     run9::box_exec_streaming(
@@ -450,7 +446,7 @@ fn run_claude_task(
     // can still be resumed.
     if let Some(sid) = &stream.session_id {
         state::save_session(box_id, sid)?;
-        elog(format!("[claude9] session: {}", sid));
+        elog(format!("[claude9] session: {sid}"));
     }
 
     if stream.is_error {
@@ -463,9 +459,13 @@ fn run_claude_task(
     // Record the invocation so the interactive picker can show recent
     // activity on a box. Best-effort — a history write failure shouldn't
     // flip an otherwise-successful task to a non-zero exit.
-    let kind = if resume_session.is_some() { "resume" } else { "task" };
+    let kind = if resume_session.is_some() {
+        "resume"
+    } else {
+        "task"
+    };
     if let Err(e) = state::append_history(box_id, kind, prompt, stream.session_id.as_deref()) {
-        elog(format!("[claude9] warn: history write failed: {}", e));
+        elog(format!("[claude9] warn: history write failed: {e}"));
     }
 
     Ok(())
@@ -487,12 +487,12 @@ fn run_claude_interactive(
     // `claude <flags> "$0"` — $0 is the seed prompt (or empty if none).
     // When empty, claude sees no positional arg and launches into the
     // normal interactive REPL.
-    let inner = format!(r#"claude{} "$0""#, flags);
+    let inner = format!(r#"claude{flags} "$0""#);
     let seed = first_prompt.unwrap_or("");
 
-    elog(format!("[claude9] talk -> {}", box_id));
+    elog(format!("[claude9] talk -> {box_id}"));
     if let Err(e) = state::append_history(box_id, "talk", seed, None) {
-        elog(format!("[claude9] warn: history write failed: {}", e));
+        elog(format!("[claude9] warn: history write failed: {e}"));
     }
 
     let status = run9::box_exec_interactive(
@@ -515,17 +515,12 @@ fn run_claude_interactive(
 /// - 1 match → use it.
 /// - N matches → list them with created_at + last activity + last prompt
 ///   snippet, prompt the user for a 1-based index on stdin.
-fn pick_or_spawn_box(
-    prefix: &str,
-    desc: Option<&str>,
-    shape: Option<&str>,
-) -> Result<String> {
+fn pick_or_spawn_box(prefix: &str, desc: Option<&str>, shape: Option<&str>) -> Result<String> {
     let ids = state::list_box_ids_by_prefix(prefix)?;
 
     if ids.is_empty() {
         elog(format!(
-            "[claude9] no box matches prefix '{}-*'; spawning a new one",
-            prefix
+            "[claude9] no box matches prefix '{prefix}-*'; spawning a new one"
         ));
         return spawn_for_interactive(prefix, desc, shape);
     }
@@ -541,16 +536,13 @@ fn pick_or_spawn_box(
     }
 
     // Gather metadata for sorting / display.
-    let mut infos: Vec<BoxPickInfo> = ids
-        .into_iter()
-        .map(|id| BoxPickInfo::load(&id))
-        .collect();
+    let mut infos: Vec<BoxPickInfo> = ids.into_iter().map(|id| BoxPickInfo::load(&id)).collect();
     // Newest-first by created_at; unknown dates sort last.
-    infos.sort_by(|a, b| b.sort_key().cmp(&a.sort_key()));
+    infos.sort_by_key(|i| std::cmp::Reverse(i.sort_key()));
 
     if infos.len() == 1 {
         let id = infos.into_iter().next().unwrap().box_id;
-        elog(format!("[claude9] reusing box {}", id));
+        elog(format!("[claude9] reusing box {id}"));
         return Ok(id);
     }
 
@@ -638,13 +630,10 @@ fn prompt_index_stdin(n: usize) -> Result<usize> {
     let stdin = std::io::stdin();
     let mut stdout = std::io::stdout();
     loop {
-        eprint!("[claude9] pick [1-{}]: ", n);
+        eprint!("[claude9] pick [1-{n}]: ");
         stdout.flush().ok();
         let mut line = String::new();
-        stdin
-            .lock()
-            .read_line(&mut line)
-            .context("reading stdin")?;
+        stdin.lock().read_line(&mut line).context("reading stdin")?;
         let trimmed = line.trim();
         if trimmed.is_empty() {
             continue;
@@ -652,7 +641,7 @@ fn prompt_index_stdin(n: usize) -> Result<usize> {
         match trimmed.parse::<usize>() {
             Ok(i) if (1..=n).contains(&i) => return Ok(i),
             _ => {
-                elog(format!("[claude9] '{}' is not in 1..={}", trimmed, n));
+                elog(format!("[claude9] '{trimmed}' is not in 1..={n}"));
             }
         }
     }
@@ -661,11 +650,7 @@ fn prompt_index_stdin(n: usize) -> Result<usize> {
 /// Spawn a fresh box for `claude9 talk` when no existing one matches
 /// the prefix. Mirrors `spawn()` but skips the optional task hook —
 /// the talk session is the task.
-fn spawn_for_interactive(
-    prefix: &str,
-    desc: Option<&str>,
-    shape: Option<&str>,
-) -> Result<String> {
+fn spawn_for_interactive(prefix: &str, desc: Option<&str>, shape: Option<&str>) -> Result<String> {
     spawn(SpawnArgs {
         name: Some(prefix.to_string()),
         desc: desc.map(|s| s.to_string()),
@@ -690,12 +675,7 @@ fn wait_for_ready(box_id: &str, timeout: Duration) -> Result<()> {
             return Ok(());
         }
         if start.elapsed() > timeout {
-            bail!(
-                "box {} did not reach ready state within {:?}; last state={}",
-                box_id,
-                timeout,
-                state
-            );
+            bail!("box {box_id} did not reach ready state within {timeout:?}; last state={state}");
         }
         thread::sleep(Duration::from_secs(3));
     }
@@ -709,7 +689,7 @@ fn extract_box_id(view: &Value) -> Result<String> {
             return Ok(s.to_string());
         }
     }
-    bail!("could not find box id in create response: {}", view)
+    bail!("could not find box id in create response: {view}")
 }
 
 /// Render a `ClaudeOptions` as extra CLI flags, ready to be spliced into
@@ -750,7 +730,7 @@ fn build_claude_flags(opts: &ClaudeOptions) -> String {
 /// to close, escape-literal, and reopen the quote.
 fn shell_single_quote(s: &str) -> String {
     let escaped = s.replace('\'', "'\\''");
-    format!("'{}'", escaped)
+    format!("'{escaped}'")
 }
 
 /// Return `n` random bytes formatted as 2*n lowercase hex chars.
@@ -761,7 +741,7 @@ fn random_hex(n: usize) -> String {
     if let Ok(mut f) = std::fs::File::open("/dev/urandom") {
         let _ = f.read_exact(&mut buf);
     }
-    buf.iter().map(|b| format!("{:02x}", b)).collect()
+    buf.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 // ────────────────────────────────────────────────────────────────────────
@@ -818,8 +798,8 @@ fn render_tool_use(tool: &ToolUseBlock) -> Vec<String> {
             let path = s("file_path").unwrap_or("?");
             let header = match (u("offset"), u("limit")) {
                 (Some(o), Some(l)) => format!("[Read] {} (lines {}–{})", path, o, o + l),
-                (Some(o), None) => format!("[Read] {} (from line {})", path, o),
-                _ => format!("[Read] {}", path),
+                (Some(o), None) => format!("[Read] {path} (from line {o})"),
+                _ => format!("[Read] {path}"),
             };
             out.push(header);
         }
@@ -828,7 +808,7 @@ fn render_tool_use(tool: &ToolUseBlock) -> Vec<String> {
             let content = s("content").unwrap_or("");
             let bytes = content.len();
             let nlines = content.lines().count();
-            out.push(format!("[Write] {} ({} bytes, {} lines)", path, bytes, nlines));
+            out.push(format!("[Write] {path} ({bytes} bytes, {nlines} lines)"));
             for line in content.lines() {
                 out.push(format!("       {}", truncate(line, TOOL_RESULT_LINE_MAX)));
             }
@@ -838,9 +818,9 @@ fn render_tool_use(tool: &ToolUseBlock) -> Vec<String> {
             let old = s("old_string").unwrap_or("");
             let new = s("new_string").unwrap_or("");
             let header = if b("replace_all").unwrap_or(false) {
-                format!("[Edit] {} (replace_all)", path)
+                format!("[Edit] {path} (replace_all)")
             } else {
-                format!("[Edit] {}", path)
+                format!("[Edit] {path}")
             };
             out.push(header);
             // Unified-diff-ish preview: `- old …` then `+ new …`. Keeps
@@ -856,27 +836,27 @@ fn render_tool_use(tool: &ToolUseBlock) -> Vec<String> {
             let pat = s("pattern").unwrap_or("");
             let mut header = format!("[Grep] /{}/", truncate(pat, 80));
             if let Some(p) = s("path") {
-                header.push_str(&format!(" in {}", p));
+                header.push_str(&format!(" in {p}"));
             }
             if let Some(g) = s("glob") {
-                header.push_str(&format!(" glob={}", g));
+                header.push_str(&format!(" glob={g}"));
             }
             if let Some(t) = s("type") {
-                header.push_str(&format!(" type={}", t));
+                header.push_str(&format!(" type={t}"));
             }
             out.push(header);
         }
         "Glob" => {
             let pat = s("pattern").unwrap_or("");
-            let mut header = format!("[Glob] {}", pat);
+            let mut header = format!("[Glob] {pat}");
             if let Some(p) = s("path") {
-                header.push_str(&format!(" in {}", p));
+                header.push_str(&format!(" in {p}"));
             }
             out.push(header);
         }
         "WebFetch" => {
             let url = s("url").unwrap_or("?");
-            out.push(format!("[WebFetch] {}", url));
+            out.push(format!("[WebFetch] {url}"));
             if let Some(prompt) = s("prompt") {
                 for line in prompt.lines() {
                     out.push(format!("       {}", truncate(line, TOOL_RESULT_LINE_MAX)));
@@ -900,17 +880,11 @@ fn render_tool_use(tool: &ToolUseBlock) -> Vec<String> {
         "TodoWrite" => {
             let todos = input.get("todos").and_then(|v| v.as_array());
             let n = todos.map(|a| a.len()).unwrap_or(0);
-            out.push(format!("[TodoWrite] {} item(s)", n));
+            out.push(format!("[TodoWrite] {n} item(s)"));
             if let Some(items) = todos {
                 for item in items {
-                    let content = item
-                        .get("content")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("?");
-                    let status = item
-                        .get("status")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("");
+                    let content = item.get("content").and_then(|v| v.as_str()).unwrap_or("?");
+                    let status = item.get("status").and_then(|v| v.as_str()).unwrap_or("");
                     let marker = match status {
                         "completed" => "✓",
                         "in_progress" => "→",
@@ -947,7 +921,7 @@ fn cap_preview_lines(lines: &mut Vec<String>) {
     }
     let dropped = lines.len() - TOOL_RESULT_MAX_LINES;
     lines.truncate(TOOL_RESULT_MAX_LINES);
-    lines.push(format!("       … ({} more lines)", dropped));
+    lines.push(format!("       … ({dropped} more lines)"));
 }
 
 /// Emit a multi-line preview of a tool result to stderr. Newlines are
@@ -987,24 +961,24 @@ fn render_tool_result(tr: &ToolResultBlock, call_label: Option<&str>) {
 
     let total = lines.len();
     let show = total.min(TOOL_RESULT_MAX_LINES);
-    let marker = if tr.is_error.unwrap_or(false) { "✗ " } else { "" };
+    let marker = if tr.is_error.unwrap_or(false) {
+        "✗ "
+    } else {
+        ""
+    };
 
     // Header: correlate back to the call. If we somehow missed the
     // tool_use (shouldn't happen in practice, but stream-json is
     // best-effort), fall back to a short id suffix so there's still
     // *some* anchor for the reader.
     let header = match call_label {
-        Some(l) => format!("  ↳ {}{}", marker, l),
-        None => format!(
-            "  ↳ {}<unknown call {}>",
-            marker,
-            short_id(&tr.tool_use_id)
-        ),
+        Some(l) => format!("  ↳ {marker}{l}"),
+        None => format!("  ↳ {}<unknown call {}>", marker, short_id(&tr.tool_use_id)),
     };
     elog(header);
 
     for line in lines.iter().take(show) {
-        elog_cont(format!("    {}", line));
+        elog_cont(format!("    {line}"));
     }
 
     if total > show {
@@ -1031,4 +1005,143 @@ fn truncate(s: &str, max: usize) -> String {
     let mut out: String = s.chars().take(max).collect();
     out.push('…');
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn shell_single_quote_simple() {
+        assert_eq!(shell_single_quote("hello"), "'hello'");
+        assert_eq!(shell_single_quote(""), "''");
+    }
+
+    #[test]
+    fn shell_single_quote_embedded_quote() {
+        // The close-escape-reopen trick: `it's` → `'it'\''s'`
+        assert_eq!(shell_single_quote("it's"), r"'it'\''s'");
+    }
+
+    #[test]
+    fn shell_single_quote_tool_pattern() {
+        // Real use case: `Bash(git:*)` must survive splicing into a
+        // `bash -lc '...'` invocation.
+        assert_eq!(shell_single_quote("Bash(git:*)"), "'Bash(git:*)'");
+    }
+
+    #[test]
+    fn truncate_under_and_at_limit() {
+        assert_eq!(truncate("short", 10), "short");
+        assert_eq!(truncate("", 10), "");
+        assert_eq!(truncate("exact", 5), "exact");
+    }
+
+    #[test]
+    fn truncate_over_limit() {
+        assert_eq!(truncate("hello world", 5), "hello…");
+    }
+
+    #[test]
+    fn truncate_respects_utf8_boundaries() {
+        // max is char-count, not byte count — slicing mid-codepoint
+        // would panic, so this would catch that regression.
+        assert_eq!(truncate("héllo world", 5), "héllo…");
+        assert_eq!(truncate("中文字符串测试", 4), "中文字符…");
+    }
+
+    #[test]
+    fn short_id_returns_last_six() {
+        assert_eq!(short_id("toolu_01ABCDEFxyz"), "DEFxyz");
+    }
+
+    #[test]
+    fn short_id_returns_short_unchanged() {
+        assert_eq!(short_id("abc"), "abc");
+        assert_eq!(short_id("abcdef"), "abcdef");
+    }
+
+    #[test]
+    fn build_claude_flags_empty() {
+        let opts = ClaudeOptions::default();
+        assert_eq!(build_claude_flags(&opts), "");
+    }
+
+    #[test]
+    fn build_claude_flags_model_and_effort() {
+        let opts = ClaudeOptions {
+            model: Some("opus".into()),
+            effort: Some("max".into()),
+            ..ClaudeOptions::default()
+        };
+        assert_eq!(build_claude_flags(&opts), " --model 'opus' --effort 'max'");
+    }
+
+    #[test]
+    fn build_claude_flags_permission_and_skip() {
+        let opts = ClaudeOptions {
+            permission_mode: Some("bypassPermissions".into()),
+            dangerously_skip_permissions: true,
+            ..ClaudeOptions::default()
+        };
+        assert_eq!(
+            build_claude_flags(&opts),
+            " --permission-mode 'bypassPermissions' --dangerously-skip-permissions"
+        );
+    }
+
+    #[test]
+    fn build_claude_flags_tool_lists_joined_and_quoted() {
+        let opts = ClaudeOptions {
+            allowed_tools: vec!["WebFetch".into(), "Bash(git:*)".into()],
+            disallowed_tools: vec!["WebSearch".into()],
+            ..ClaudeOptions::default()
+        };
+        assert_eq!(
+            build_claude_flags(&opts),
+            " --allowedTools 'WebFetch,Bash(git:*)' --disallowedTools 'WebSearch'"
+        );
+    }
+
+    #[test]
+    fn extract_box_id_prefers_box_id_over_id() {
+        let view = json!({ "box_id": "db9-abc", "id": "other" });
+        assert_eq!(extract_box_id(&view).unwrap(), "db9-abc");
+    }
+
+    #[test]
+    fn extract_box_id_falls_back_to_id() {
+        let view = json!({ "id": "fallback" });
+        assert_eq!(extract_box_id(&view).unwrap(), "fallback");
+    }
+
+    #[test]
+    fn extract_box_id_errors_when_missing() {
+        let view = json!({ "something_else": 1 });
+        assert!(extract_box_id(&view).is_err());
+    }
+
+    #[test]
+    fn cap_preview_lines_keeps_short_input() {
+        let mut lines: Vec<String> = (0..5).map(|i| format!("line {i}")).collect();
+        cap_preview_lines(&mut lines);
+        assert_eq!(lines.len(), 5);
+    }
+
+    #[test]
+    fn cap_preview_lines_truncates_long_input() {
+        let mut lines: Vec<String> = (0..20).map(|i| format!("line {i}")).collect();
+        cap_preview_lines(&mut lines);
+        assert_eq!(lines.len(), TOOL_RESULT_MAX_LINES + 1);
+        let footer = lines.last().unwrap();
+        assert!(footer.contains(&format!("{} more lines", 20 - TOOL_RESULT_MAX_LINES)));
+    }
+
+    #[test]
+    fn random_hex_has_expected_length() {
+        // n bytes → 2n hex chars.
+        assert_eq!(random_hex(4).len(), 8);
+        assert_eq!(random_hex(8).len(), 16);
+    }
 }

@@ -43,3 +43,36 @@ fn extract_snap_id(view: &Value) -> Option<String> {
     }
     None
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn prefers_box_snap_id() {
+        let v = json!({ "box_snap_id": "sv1", "snap_id": "sv2" });
+        assert_eq!(extract_snap_id(&v).as_deref(), Some("sv1"));
+    }
+
+    #[test]
+    fn falls_back_through_candidate_keys() {
+        let v = json!({ "snap_id": "sv2" });
+        assert_eq!(extract_snap_id(&v).as_deref(), Some("sv2"));
+        let v = json!({ "source_snap_id": "sv3" });
+        assert_eq!(extract_snap_id(&v).as_deref(), Some("sv3"));
+    }
+
+    #[test]
+    fn skips_empty_string_values() {
+        // An empty string shouldn't count as "found" — fall through.
+        let v = json!({ "box_snap_id": "", "snap_id": "sv2" });
+        assert_eq!(extract_snap_id(&v).as_deref(), Some("sv2"));
+    }
+
+    #[test]
+    fn returns_none_when_no_key_present() {
+        let v = json!({ "other": 1 });
+        assert_eq!(extract_snap_id(&v), None);
+    }
+}

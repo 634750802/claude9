@@ -27,7 +27,7 @@ fn run_raw(args: &[String]) -> Result<(String, String)> {
 fn run_json(args: &[String]) -> Result<Value> {
     let (stdout, _) = run_raw(args)?;
     serde_json::from_str(&stdout)
-        .with_context(|| format!("parsing run9 {:?} output as JSON:\n{}", args, stdout))
+        .with_context(|| format!("parsing run9 {args:?} output as JSON:\n{stdout}"))
 }
 
 pub fn box_inspect(box_id: &str) -> Result<Value> {
@@ -52,7 +52,7 @@ pub fn box_create_from_snap(
     args.push("Managed by claude9. Do not operate on this box directly.".into());
     for (k, v) in labels {
         args.push("--label".into());
-        args.push(format!("{}={}", k, v));
+        args.push(format!("{k}={v}"));
     }
     run_json(&args)
 }
@@ -80,7 +80,7 @@ fn build_exec_args(
     ];
     for (k, v) in env {
         args.push("-e".into());
-        args.push(format!("{}={}", k, v));
+        args.push(format!("{k}={v}"));
     }
     args.push("--".into());
     for c in command {

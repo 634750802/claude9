@@ -41,17 +41,17 @@ pub fn save_session(box_id: &str, session_id: &str) -> Result<()> {
 
 pub fn load_session(box_id: &str) -> Result<String> {
     let path = box_dir(box_id)?.join("session.txt");
-    let s = std::fs::read_to_string(&path)
-        .with_context(|| format!("no saved session for {}", box_id))?;
+    let s =
+        std::fs::read_to_string(&path).with_context(|| format!("no saved session for {box_id}"))?;
     Ok(s.trim().to_string())
 }
 
 pub fn load_meta(box_id: &str) -> Result<BoxMeta> {
     let path = box_dir(box_id)?.join("meta.toml");
-    let text = std::fs::read_to_string(&path)
-        .with_context(|| format!("reading {}", path.display()))?;
-    let meta: BoxMeta = toml::from_str(&text)
-        .with_context(|| format!("parsing {}", path.display()))?;
+    let text =
+        std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+    let meta: BoxMeta =
+        toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
     Ok(meta)
 }
 
@@ -75,7 +75,12 @@ pub struct HistoryEntry {
 
 const HISTORY_SNIPPET_MAX: usize = 200;
 
-pub fn append_history(box_id: &str, kind: &str, prompt: &str, session_id: Option<&str>) -> Result<()> {
+pub fn append_history(
+    box_id: &str,
+    kind: &str,
+    prompt: &str,
+    session_id: Option<&str>,
+) -> Result<()> {
     let path = box_dir(box_id)?.join("history.jsonl");
     let snippet: String = prompt.chars().take(HISTORY_SNIPPET_MAX).collect();
     let entry = HistoryEntry {
@@ -90,7 +95,7 @@ pub fn append_history(box_id: &str, kind: &str, prompt: &str, session_id: Option
         .append(true)
         .open(&path)
         .with_context(|| format!("opening {}", path.display()))?;
-    writeln!(f, "{}", line)?;
+    writeln!(f, "{line}")?;
     Ok(())
 }
 
@@ -99,8 +104,8 @@ pub fn load_history(box_id: &str) -> Result<Vec<HistoryEntry>> {
     if !path.exists() {
         return Ok(Vec::new());
     }
-    let text = std::fs::read_to_string(&path)
-        .with_context(|| format!("reading {}", path.display()))?;
+    let text =
+        std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
     let mut entries = Vec::new();
     for line in text.lines() {
         let line = line.trim();
@@ -122,11 +127,9 @@ pub fn list_box_ids_by_prefix(prefix: &str) -> Result<Vec<String>> {
     if !root.exists() {
         return Ok(Vec::new());
     }
-    let needle = format!("{}-", prefix);
+    let needle = format!("{prefix}-");
     let mut ids = Vec::new();
-    for entry in std::fs::read_dir(&root)
-        .with_context(|| format!("reading {}", root.display()))?
-    {
+    for entry in std::fs::read_dir(&root).with_context(|| format!("reading {}", root.display()))? {
         let entry = entry?;
         if !entry.file_type()?.is_dir() {
             continue;
@@ -138,4 +141,49 @@ pub fn list_box_ids_by_prefix(prefix: &str) -> Result<Vec<String>> {
         }
     }
     Ok(ids)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn history_entry_round_trips_through_json() {
+        let entry = HistoryEntry {
+            ts: Utc::now(),
+            kind: "talk".into(),
+            prompt_snippet: "hello world".into(),
+            session_id: Some("sess-123".into()),
+        };
+        let line = serde_json::to_string(&entry).unwrap();
+        let parsed: HistoryEntry = serde_json::from_str(&line).unwrap();
+        assert_eq!(parsed.kind, "talk");
+        assert_eq!(parsed.prompt_snippet, "hello world");
+        assert_eq!(parsed.session_id.as_deref(), Some("sess-123"));
+    }
+
+    #[test]
+    fn history_entry_omits_session_id_when_none() {
+        // skip_serializing_if keeps the field out of the JSONL line entirely
+        // — older `talk` entries should be indistinguishable from new ones.
+        let entry = HistoryEntry {
+            ts: Utc::now(),
+            kind: "talk".into(),
+            prompt_snippet: "hi".into(),
+            session_id: None,
+        };
+        let line = serde_json::to_string(&entry).unwrap();
+        assert!(!line.contains("session_id"));
+        let parsed: HistoryEntry = serde_json::from_str(&line).unwrap();
+        assert!(parsed.session_id.is_none());
+    }
+
+    #[test]
+    fn history_entry_deserializes_without_session_id_field() {
+        // Older entries written before the field existed should still parse.
+        let raw = r#"{"ts":"2026-01-01T00:00:00Z","kind":"task","prompt_snippet":"x"}"#;
+        let parsed: HistoryEntry = serde_json::from_str(raw).unwrap();
+        assert_eq!(parsed.kind, "task");
+        assert!(parsed.session_id.is_none());
+    }
 }

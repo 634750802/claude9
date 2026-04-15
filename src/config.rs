@@ -159,9 +159,61 @@ pub fn ensure_exists() -> Result<PathBuf> {
 
 pub fn load() -> Result<Config> {
     let path = ensure_exists()?;
-    let text = std::fs::read_to_string(&path)
-        .with_context(|| format!("reading {}", path.display()))?;
-    let cfg: Config = toml::from_str(&text)
-        .with_context(|| format!("parsing {}", path.display()))?;
+    let text =
+        std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+    let cfg: Config =
+        toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
     Ok(cfg)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn project_local_name_uses_explicit_alias() {
+        let p = Project {
+            repo: "owner/repo".into(),
+            name: Some("alias".into()),
+        };
+        assert_eq!(p.local_name(), "alias");
+    }
+
+    #[test]
+    fn project_local_name_defaults_to_repo_basename() {
+        let p = Project {
+            repo: "owner/repo".into(),
+            name: None,
+        };
+        assert_eq!(p.local_name(), "repo");
+    }
+
+    #[test]
+    fn project_local_name_handles_repo_without_slash() {
+        let p = Project {
+            repo: "standalone".into(),
+            name: None,
+        };
+        assert_eq!(p.local_name(), "standalone");
+    }
+
+    #[test]
+    fn config_default_round_trips_through_toml() {
+        let cfg = Config::default();
+        let text = toml::to_string_pretty(&cfg).unwrap();
+        let parsed: Config = toml::from_str(&text).unwrap();
+        assert_eq!(parsed.defaults.shape, cfg.defaults.shape);
+        assert_eq!(parsed.projects.len(), cfg.projects.len());
+    }
+
+    #[test]
+    fn claude_options_serde_skips_none_and_empty() {
+        // skip_serializing_if should keep unset fields out of the
+        // scaffolded config so users don't see a wall of `= null` lines.
+        let opts = ClaudeOptions::default();
+        let text = toml::to_string(&opts).unwrap();
+        assert!(!text.contains("model"));
+        assert!(!text.contains("effort"));
+        assert!(!text.contains("permission_mode"));
+    }
 }
