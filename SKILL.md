@@ -25,7 +25,7 @@ Do **not** use `claude9` for:
 
 - Running claude locally (just call `claude` directly).
 - General box management — it only does
-  `spawn` / `task` / `resume` / `interactive` / `config`.
+  `spawn` / `task` / `resume` / `interactive` / `bash` / `config`.
   No `ls`, `stop`, `rm`, `attach`. Use `run9` directly for those.
 
 ## Concepts
@@ -73,17 +73,23 @@ is up to you — `claude9` never touches those.
 See the **Layout** section below for the remote user and workspace
 paths `claude9` assumes.
 
-To set the base box up, exec in as root and do whatever you need:
+To set the base box up, drop into a shell on it:
 
 ```sh
-run9 box exec <base-box> --user root -it /bin/bash
+claude9 bash
 ```
 
-Refreshing it later works the same way — exec back in, install the new
-thing, and the next `claude9 spawn` picks it up. There's no explicit
-"rebuild snap" step in the normal case. If `run9 box create` ever
-complains that the base box's snap is `inuse`, see the **Gotchas**
-section.
+This targets `defaults.base_box` from config.toml and lands you in
+`/home/guy/workspace` as `guy`. If you need root (for package installs
+etc.), escalate from there (e.g. `sudo -i`) — claude9 intentionally
+doesn't expose a `--user` flag, since everything else in the remote
+contract is keyed on `guy`.
+
+Refreshing the base box later works the same way — `claude9 bash` back
+in, install the new thing, and the next `claude9 spawn` picks it up.
+There's no explicit "rebuild snap" step in the normal case. If
+`run9 box create` ever complains that the base box's snap is `inuse`,
+see the **Gotchas** section.
 
 ## Commands
 
@@ -211,6 +217,29 @@ session-managed surface.
 
 ```sh
 claude9 interactive --name db9 --first-prompt-file primer.md
+```
+
+### `claude9 bash [BOX] [-- BASH_ARGS...]`
+
+Transparent passthrough to `run9 box exec -it <box> --user guy --workdir
+/home/guy/workspace -- /bin/bash`. Used for hand-preparing the base box
+or for jumping onto any run9 box without memorizing the `run9` incantation.
+
+- `BOX` — optional positional; defaults to `defaults.base_box` from
+  config.toml. Pass any run9 box name / id to target something else
+  (e.g. a spawned box you want to inspect manually).
+- `--` — anything after is forwarded to `bash` as its own args, so
+  `claude9 bash -- -lc 'echo hi'` runs a one-shot command and exits,
+  while bare `claude9 bash` drops into an interactive shell.
+
+`user` and `workdir` are **fixed** to `guy` / `/home/guy/workspace` —
+the same remote contract `task` / `resume` / `interactive` already use.
+If you need root, escalate from inside the shell.
+
+```sh
+claude9 bash                               # interactive shell on base box
+claude9 bash db9-a1b2c3d4                  # interactive shell on a spawned box
+claude9 bash -- -lc 'ls /home/guy/workspace/repos'
 ```
 
 ## Task history (`.claude9/state/<box-id>/history.jsonl`)

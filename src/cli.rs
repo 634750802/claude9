@@ -24,6 +24,8 @@ pub enum Command {
     Resume(ResumeArgs),
     /// Spawn-or-reuse a named box and drop into an interactive claude session
     Interactive(InteractiveArgs),
+    /// Drop into `/bin/bash` on a run9 box (defaults to the configured base box)
+    Bash(BashArgs),
 }
 
 #[derive(Args)]
@@ -69,6 +71,17 @@ pub struct TaskArgs {
     /// Read prompt from file instead of positional args
     #[arg(short, long)]
     pub file: Option<PathBuf>,
+}
+
+#[derive(Args)]
+pub struct BashArgs {
+    /// Box name / id (defaults to `defaults.base_box` from config.toml)
+    pub box_name: Option<String>,
+
+    /// Extra args passed to `/bin/bash` after `--`
+    /// (e.g. `claude9 bash -- -lc 'echo hi'`)
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+    pub bash_args: Vec<String>,
 }
 
 #[derive(Args)]

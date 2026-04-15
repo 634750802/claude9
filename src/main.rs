@@ -16,5 +16,6 @@ fn main() -> Result<()> {
         cli::Command::Task(args) => commands::task(args),
         cli::Command::Resume(args) => commands::resume(args),
         cli::Command::Interactive(args) => commands::interactive(args),
+        cli::Command::Bash(args) => commands::bash(args),
     }
 }

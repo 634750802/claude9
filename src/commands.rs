@@ -9,7 +9,7 @@ use std::path::Path;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::cli::{InteractiveArgs, ResumeArgs, SpawnArgs, TaskArgs};
+use crate::cli::{BashArgs, InteractiveArgs, ResumeArgs, SpawnArgs, TaskArgs};
 use crate::config::{self, ClaudeOptions, REMOTE_USER, REPOS_DIR, WORKSPACE};
 use crate::resolver;
 use crate::run9;
@@ -205,6 +205,39 @@ pub fn resume(args: ResumeArgs) -> Result<()> {
     let prompt = resolve_prompt(join_opt(&args.prompt), args.file.as_deref())?
         .ok_or_else(|| anyhow!("no follow-up given (positional args or -f FILE)"))?;
     run_claude_task(&args.box_id, &prompt, Some(&session), &cfg.claude)
+}
+
+/// Transparent passthrough to `run9 box exec -it ... -- /bin/bash`.
+/// Target box defaults to `defaults.base_box` from config.toml — the
+/// main use case is hand-preparing the base box per the "Base box
+/// contract" section of SKILL.md. `user` and `workdir` are fixed to
+/// `guy` and `/home/guy/workspace`: matches the remote layout claude9
+/// already assumes everywhere else, and there's no reason to operate on
+/// any other path via this shortcut.
+///
+/// Positional `-- ARGS...` get forwarded to bash as its own args, so
+/// `claude9 bash -- -lc 'echo hi'` runs a one-shot non-interactive
+/// command while bare `claude9 bash` drops into an interactive shell.
+pub fn bash(args: BashArgs) -> Result<()> {
+    let cfg = config::load()?;
+    let target = args
+        .box_name
+        .clone()
+        .unwrap_or_else(|| cfg.defaults.base_box.clone());
+
+    let mut cmd: Vec<String> = vec!["/bin/bash".into()];
+    cmd.extend(args.bash_args.iter().cloned());
+    let cmd_refs: Vec<&str> = cmd.iter().map(|s| s.as_str()).collect();
+
+    elog(format!("[claude9] bash -> {} (user={}, workdir={})", target, REMOTE_USER, WORKSPACE));
+    let status = run9::box_exec_interactive(&target, REMOTE_USER, WORKSPACE, &cmd_refs)?;
+    if !status.success() {
+        bail!(
+            "bash exited non-zero (code {})",
+            status.code().unwrap_or(-1)
+        );
+    }
+    Ok(())
 }
 
 pub fn interactive(args: InteractiveArgs) -> Result<()> {
