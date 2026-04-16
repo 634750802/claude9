@@ -119,6 +119,68 @@ pub fn load_history(box_id: &str) -> Result<Vec<HistoryEntry>> {
     Ok(entries)
 }
 
+// ── Background task bookkeeping ──────────────────────────────────────
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct BgTask {
+    pub exec_id: String,
+    pub started_at: DateTime<Utc>,
+    pub prompt_snippet: String,
+}
+
+pub fn save_bg_task(box_id: &str, task: &BgTask) -> Result<()> {
+    let path = box_dir(box_id)?.join("bg.toml");
+    std::fs::write(&path, toml::to_string_pretty(task)?)?;
+    Ok(())
+}
+
+pub fn load_bg_task(box_id: &str) -> Result<Option<BgTask>> {
+    let path = box_dir(box_id)?.join("bg.toml");
+    if !path.exists() {
+        return Ok(None);
+    }
+    let text =
+        std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+    let task: BgTask =
+        toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
+    Ok(Some(task))
+}
+
+pub fn clear_bg_task(box_id: &str) -> Result<()> {
+    let path = box_dir(box_id)?.join("bg.toml");
+    if path.exists() {
+        std::fs::remove_file(&path)?;
+    }
+    Ok(())
+}
+
+pub fn list_bg_tasks() -> Result<Vec<(String, BgTask)>> {
+    let root = state_root()?;
+    if !root.exists() {
+        return Ok(Vec::new());
+    }
+    let mut results = Vec::new();
+    for entry in std::fs::read_dir(&root).with_context(|| format!("reading {}", root.display()))? {
+        let entry = entry?;
+        if !entry.file_type()?.is_dir() {
+            continue;
+        }
+        let bg_path = entry.path().join("bg.toml");
+        if !bg_path.exists() {
+            continue;
+        }
+        if let Ok(text) = std::fs::read_to_string(&bg_path) {
+            if let Ok(task) = toml::from_str::<BgTask>(&text) {
+                if let Some(name) = entry.file_name().to_str() {
+                    results.push((name.to_string(), task));
+                }
+            }
+        }
+    }
+    results.sort_by(|a, b| b.1.started_at.cmp(&a.1.started_at));
+    Ok(results)
+}
+
 /// Every box id under `.claude9/state/` whose directory name starts with
 /// `<prefix>-`. Does not validate the prefix format; caller is expected
 /// to have passed a user-supplied prefix string already.

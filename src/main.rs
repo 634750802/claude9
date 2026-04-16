@@ -17,5 +17,8 @@ fn main() -> Result<()> {
         cli::Command::Resume(args) => commands::resume(args),
         cli::Command::Talk(args) => commands::talk(args),
         cli::Command::Bash(args) => commands::bash(args),
+        cli::Command::Join(args) => commands::join(args),
+        cli::Command::Stop(args) => commands::stop(args),
+        cli::Command::Ps => commands::ps(),
     }
 }

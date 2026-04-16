@@ -11,3 +11,4 @@ toml = "0.8"
 anyhow = "1"
 chrono = { version = "0.4", features = ["serde"] }
 claude-codes = { version = "2.1.53", default-features = false, features = ["types"] }
+ctrlc = "3"
