@@ -448,6 +448,11 @@ impl ClaudeStreamState {
 
 const BG_DEADLINE: &str = "10h";
 const BG_POLL_INTERVAL: Duration = Duration::from_secs(2);
+/// Max consecutive `pull-output` errors before we give up. Transient
+/// errors happen right after `exec-bg` returns (backend not yet ready)
+/// and sometimes once the exec is reaped after completion — both are
+/// expected and resolved on retry.
+const PULL_ERROR_LIMIT: u32 = 10;
 
 fn ensure_no_active_bg_task(box_id: &str) -> Result<()> {
     let existing = state::load_bg_task(box_id)?;
@@ -535,6 +540,7 @@ fn poll_bg_task(box_id: &str, exec_id: &str, from_start: bool) -> Result<()> {
     let mut line_buf = String::new();
     let mut session_saved = false;
     let mut first_pull = true;
+    let mut consecutive_errors: u32 = 0;
 
     let interrupted = Arc::new(AtomicBool::new(false));
     {
@@ -558,6 +564,7 @@ fn poll_bg_task(box_id: &str, exec_id: &str, from_start: bool) -> Result<()> {
 
         match run9::box_exec_bg_pull(exec_id, use_from_start) {
             Ok(chunk) => {
+                consecutive_errors = 0;
                 if !chunk.is_empty() {
                     line_buf.push_str(&chunk);
                     while let Some(pos) = line_buf.find('\n') {
@@ -568,8 +575,17 @@ fn poll_bg_task(box_id: &str, exec_id: &str, from_start: bool) -> Result<()> {
                 }
             }
             Err(e) => {
-                elog(format!("[claude9] task ended: {e}"));
-                break;
+                // Transient errors happen briefly right after exec-bg
+                // returns (backend not ready yet) and sometimes once the
+                // exec is cleaned up. Retry up to PULL_ERROR_LIMIT before
+                // giving up.
+                consecutive_errors += 1;
+                if stream.final_result.is_some() || consecutive_errors >= PULL_ERROR_LIMIT {
+                    if stream.final_result.is_none() {
+                        elog(format!("[claude9] task ended unexpectedly: {e}"));
+                    }
+                    break;
+                }
             }
         }
 
