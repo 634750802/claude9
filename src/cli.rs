@@ -26,6 +26,12 @@ pub enum Command {
     Talk(TalkArgs),
     /// Drop into `/bin/bash` on a run9 box (defaults to the configured base box)
     Bash(BashArgs),
+    /// Re-attach to a running background task on a box
+    Join(JoinArgs),
+    /// Stop a running background task on a box
+    Stop(StopArgs),
+    /// List background tasks
+    Ps,
 }
 
 #[derive(Args)]
@@ -128,4 +134,16 @@ pub struct ResumeArgs {
     /// Read follow-up from file instead of positional args
     #[arg(short, long)]
     pub file: Option<PathBuf>,
+}
+
+#[derive(Args)]
+pub struct JoinArgs {
+    /// Target box id
+    pub box_id: String,
+}
+
+#[derive(Args)]
+pub struct StopArgs {
+    /// Target box id
+    pub box_id: String,
 }

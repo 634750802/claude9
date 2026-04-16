@@ -1,9 +1,7 @@
 use anyhow::{bail, Context, Result};
 use serde_json::Value;
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Read};
 use std::process::{Command, ExitStatus, Stdio};
-use std::thread;
 
 fn run_raw(args: &[String]) -> Result<(String, String)> {
     let out = Command::new("run9")
@@ -106,68 +104,57 @@ pub fn box_exec(
     Ok(ExecResult { stdout, stderr })
 }
 
-/// Run a command inside a box via `run9 box exec`, streaming stdout
-/// line-by-line to a caller-supplied callback. stderr is drained in a
-/// background thread and returned as a single string on completion.
-///
-/// Used for `claude -p --output-format stream-json`: each JSON-lines event
-/// is handed to the callback as it arrives so the user sees live progress.
-pub fn box_exec_streaming<F>(
+pub fn box_exec_bg(
     box_id: &str,
     user: &str,
     workdir: &str,
+    deadline: &str,
     env: &HashMap<String, String>,
     command: &[&str],
-    mut on_stdout_line: F,
-) -> Result<ExecResult>
-where
-    F: FnMut(&str),
-{
-    let args = build_exec_args(box_id, user, workdir, env, command);
-
-    let mut child = Command::new("run9")
-        .args(&args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .context("failed to spawn run9; is it on PATH?")?;
-
-    let stdout_pipe = child.stdout.take().expect("stdout is piped");
-    let stderr_pipe = child.stderr.take().expect("stderr is piped");
-
-    // Drain stderr concurrently so a noisy stderr can't block stdout reads.
-    let stderr_handle = thread::spawn(move || -> String {
-        let mut buf = String::new();
-        let _ = BufReader::new(stderr_pipe).read_to_string(&mut buf);
-        buf
-    });
-
-    let mut stdout_buf = String::new();
-    let reader = BufReader::new(stdout_pipe);
-    for line in reader.lines() {
-        let line = line.context("reading run9 stdout")?;
-        on_stdout_line(&line);
-        stdout_buf.push_str(&line);
-        stdout_buf.push('\n');
+) -> Result<Value> {
+    let mut args: Vec<String> = vec![
+        "box".into(),
+        "exec-bg".into(),
+        box_id.into(),
+        format!("--deadline={deadline}"),
+        "--user".into(),
+        user.into(),
+        "--workdir".into(),
+        workdir.into(),
+    ];
+    for (k, v) in env {
+        args.push("-e".into());
+        args.push(format!("{k}={v}"));
     }
-
-    let status = child.wait().context("waiting for run9")?;
-    let stderr = stderr_handle.join().unwrap_or_default();
-
-    if !status.success() {
-        bail!(
-            "run9 {:?} failed (exit {}):\n{}",
-            args,
-            status.code().unwrap_or(-1),
-            stderr.trim_end()
-        );
+    args.push("--".into());
+    for c in command {
+        args.push((*c).into());
     }
+    run_json(&args)
+}
 
-    Ok(ExecResult {
-        stdout: stdout_buf,
-        stderr,
-    })
+pub fn box_exec_bg_pull(exec_id: &str, from_start: bool) -> Result<String> {
+    let mut args: Vec<String> = vec![
+        "box".into(),
+        "exec-bg".into(),
+        "pull-output".into(),
+        exec_id.into(),
+    ];
+    if from_start {
+        args.push("--from-start".into());
+    }
+    let (stdout, _) = run_raw(&args)?;
+    Ok(stdout)
+}
+
+pub fn box_exec_bg_kill(exec_id: &str) -> Result<()> {
+    run_raw(&[
+        "box".into(),
+        "exec-bg".into(),
+        "kill".into(),
+        exec_id.into(),
+    ])?;
+    Ok(())
 }
 
 /// Run a command inside a box via `run9 box exec -it`, letting the child

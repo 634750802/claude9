@@ -25,8 +25,8 @@ Do **not** use `claude9` for:
 
 - Running claude locally (just call `claude` directly).
 - General box management — it only does
-  `spawn` / `task` / `resume` / `talk` / `bash` / `config`.
-  No `ls`, `stop`, `rm`, `attach`. Use `run9` directly for those.
+  `spawn` / `task` / `resume` / `talk` / `bash` / `join` / `stop` / `ps` /
+  `config`. No `ls`, `rm`, `attach`. Use `run9` directly for those.
 
 ## Concepts
 
@@ -158,21 +158,31 @@ pre-forked detached snap instead.
 
 ### `claude9 task <box-id> [PROMPT...]`
 
-Run `claude -p --output-format stream-json --verbose "<prompt>"` on the box.
-Streams assistant text and tool-use markers live as they arrive. Saves the
-final `session_id` to `.claude9/state/<box-id>/session.txt`, overwriting any
-previous one. Exits non-zero if claude reports an error.
+Run `claude -p --output-format stream-json --verbose "<prompt>"` on the box
+as a **background exec** (`run9 box exec-bg`), then poll its output and
+stream it live. Because the task is detached on the remote side, a local
+network drop or Ctrl+C does not kill it — see **Background tasks** below
+for the detach/rejoin/stop flow. Saves the `session_id` to
+`.claude9/state/<box-id>/session.txt` as soon as claude reports it (not
+just on success), so `resume` still works even if the task is interrupted
+partway through.
+
+Only one background task per box at a time — if one is already running,
+`task` refuses and tells you to `join` or `stop` it first.
 
 ```sh
 claude9 task db9-a1b2c3d4 "audit the db9-server package for N+1 queries"
 claude9 task db9-a1b2c3d4 -f ./prompt.md
+# Ctrl+C → detach (task keeps running); claude9 join db9-a1b2c3d4 to reattach
 ```
 
 ### `claude9 resume <box-id> [PROMPT...]`
 
 Read the saved session id, then run
 `claude -p --resume <sid> --output-format stream-json --verbose "<prompt>"`.
-Same streaming display. Fails loudly if no session is saved for the box id.
+Runs as a background exec with the same detach / `join` / `stop`
+behavior as `claude9 task` — see **Background tasks**. Fails loudly if
+no session is saved for the box id.
 
 ```sh
 claude9 resume db9-a1b2c3d4 "now draft a fix for the worst three"
@@ -241,6 +251,65 @@ claude9 bash                               # interactive shell on base box
 claude9 bash db9-a1b2c3d4                  # interactive shell on a spawned box
 claude9 bash -- -lc 'ls /home/guy/workspace/repos'
 ```
+
+### `claude9 join <box-id>`
+
+Reattach to the background task currently running on a box. Replays the
+task's output from the beginning (via `run9 box exec-bg pull-output
+--from-start`), then keeps streaming new output until the task ends,
+Ctrl+C detaches again, or idle/hard deadline hits. Fails loudly if no
+background task is recorded for that box.
+
+```sh
+claude9 join db9-a1b2c3d4
+```
+
+### `claude9 stop <box-id>`
+
+Kill the background task on a box (`run9 box exec-bg kill`) and clear
+its local record. Use when the task is stuck or the prompt was wrong —
+regular completion clears the record automatically, so there's no need
+to call `stop` after a successful run.
+
+```sh
+claude9 stop db9-a1b2c3d4
+```
+
+### `claude9 ps`
+
+List background tasks known to this project group, one per line:
+`<box-id>  <age>  <prompt snippet>`. Only shows tasks in the current
+`.claude9/state/`, so unrelated project groups stay isolated.
+
+```sh
+claude9 ps
+```
+
+## Background tasks
+
+`claude9 task` runs claude under `run9 box exec-bg` so the task survives
+local disconnects. The model:
+
+- **Detach on Ctrl+C.** The remote claude keeps running; claude9 just
+  stops streaming and returns. Reattach with `claude9 join <box-id>`.
+- **Idle timeout: 1 h.** `run9 exec-bg` keeps a detached task alive as
+  long as something keeps pulling its output. Once nothing has pulled
+  for ~1 hour, the backend reaps it. Rule of thumb: if you walk away
+  for more than an hour, assume the task is gone.
+- **Hard deadline: 10 h.** Every task is launched with `--deadline=10h`,
+  which is the run9 ceiling. Anything still running at that point is
+  killed.
+- **One task per box.** `claude9 task` refuses to start a second task
+  while one is recorded; run a second task on a second box, or `stop`
+  the first.
+- **Remote is truth.** claude9 only remembers `exec_id` locally
+  (`.claude9/state/<box-id>/bg.toml`). Task status — running, done,
+  reaped — is always fetched from `run9 exec-bg pull-output`, never
+  guessed from a local flag.
+- **Session id is saved early.** As soon as claude emits its
+  `session_id` in the stream, it goes straight into `session.txt`. If
+  the task is interrupted before it finishes, `claude9 resume` can
+  still continue the conversation.
 
 ## Choosing a shape
 
@@ -346,7 +415,9 @@ Created by `claude9` in the project tree:
     └── <box-id>/
         ├── meta.toml      # box_id, base_box, snap_id, shape, created_at, projects[]
         ├── session.txt    # last claude session id (from task / resume)
-        └── history.jsonl  # append-only log of task / resume / talk invocations
+        ├── history.jsonl  # append-only log of task / resume / talk invocations
+        └── bg.toml        # current background task: exec_id, started_at, prompt_snippet
+                           # (only present while a task / resume is running; cleared on end)
 ```
 
 Hard-coded inside the remote box (contract with the base snap):
@@ -395,7 +466,7 @@ project groups stay isolated just by living in different directory trees.
 
 Not yet implemented, don't suggest these as if they work:
 
-- `claude9 ls` / `stop` / `rm` / `doctor`
+- `claude9 ls` / `rm` / `doctor`
 - Parallel repo sync
 - Remote-control / streaming of talk sessions (`talk` hands off to
   `run9 box exec -it` and doesn't intercept the stream)

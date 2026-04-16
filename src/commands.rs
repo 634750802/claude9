@@ -4,14 +4,16 @@ use claude_codes::{ClaudeOutput, ContentBlock, ToolResultBlock, ToolResultConten
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::cli::{BashArgs, ResumeArgs, SpawnArgs, TalkArgs, TaskArgs};
+use crate::cli::{BashArgs, JoinArgs, ResumeArgs, SpawnArgs, StopArgs, TalkArgs, TaskArgs};
 use crate::config::{self, ClaudeOptions, REMOTE_USER, REPOS_DIR, WORKSPACE};
 use crate::resolver;
 use crate::run9;
-use crate::state::{self, BoxMeta};
+use crate::state::{self, BgTask, BoxMeta};
 
 /// Width of the `[HH:MM:SS] ` prefix that `elog` emits — used by
 /// `elog_cont` to left-pad continuation lines so they visually align
@@ -241,6 +243,47 @@ pub fn bash(args: BashArgs) -> Result<()> {
     Ok(())
 }
 
+pub fn join(args: JoinArgs) -> Result<()> {
+    let task = state::load_bg_task(&args.box_id)?
+        .ok_or_else(|| anyhow!("no background task on box {}", args.box_id))?;
+    elog(format!(
+        "[claude9] joining task on {} (exec_id={})",
+        args.box_id, task.exec_id
+    ));
+    poll_bg_task(&args.box_id, &task.exec_id, true)
+}
+
+pub fn stop(args: StopArgs) -> Result<()> {
+    let task = state::load_bg_task(&args.box_id)?
+        .ok_or_else(|| anyhow!("no background task on box {}", args.box_id))?;
+    elog(format!("[claude9] stopping task on {}", args.box_id));
+    match run9::box_exec_bg_kill(&task.exec_id) {
+        Ok(()) => elog("[claude9] stopped"),
+        Err(e) => elog(format!("[claude9] kill returned: {e}")),
+    }
+    state::clear_bg_task(&args.box_id)?;
+    Ok(())
+}
+
+pub fn ps() -> Result<()> {
+    let tasks = state::list_bg_tasks()?;
+    if tasks.is_empty() {
+        elog("[claude9] no background tasks");
+        return Ok(());
+    }
+    for (box_id, t) in &tasks {
+        let age = Utc::now().signed_duration_since(t.started_at);
+        let age_str = if age.num_hours() > 0 {
+            format!("{}h{}m ago", age.num_hours(), age.num_minutes() % 60)
+        } else {
+            format!("{}m ago", age.num_minutes())
+        };
+        let snippet: String = t.prompt_snippet.chars().take(60).collect();
+        eprintln!("  {box_id}  {age_str:>10}  {snippet}");
+    }
+    Ok(())
+}
+
 pub fn talk(args: TalkArgs) -> Result<()> {
     let mut cfg = config::load()?;
     // Per-invocation CLI overrides for model / effort, same pattern as
@@ -403,24 +446,47 @@ impl ClaudeStreamState {
     }
 }
 
+const BG_DEADLINE: &str = "10h";
+const BG_POLL_INTERVAL: Duration = Duration::from_secs(2);
+/// Max consecutive `pull-output` errors before we give up. Transient
+/// errors happen right after `exec-bg` returns (backend not yet ready)
+/// and sometimes once the exec is reaped after completion — both are
+/// expected and resolved on retry.
+const PULL_ERROR_LIMIT: u32 = 10;
+
+fn ensure_no_active_bg_task(box_id: &str) -> Result<()> {
+    let existing = state::load_bg_task(box_id)?;
+    let task = match existing {
+        Some(t) => t,
+        None => return Ok(()),
+    };
+    // Probe whether the remote task is still alive.
+    match run9::box_exec_bg_pull(&task.exec_id, false) {
+        Ok(_) => {
+            bail!(
+                "box {box_id} already has a running task (exec_id={}). \
+                 Stop it first: claude9 stop {box_id}",
+                task.exec_id
+            );
+        }
+        Err(_) => {
+            state::clear_bg_task(box_id)?;
+            Ok(())
+        }
+    }
+}
+
 fn run_claude_task(
     box_id: &str,
     prompt: &str,
     resume_session: Option<&str>,
     claude_opts: &ClaudeOptions,
 ) -> Result<()> {
+    ensure_no_active_bg_task(box_id)?;
+
     let mut env = HashMap::new();
     env.insert("C9_PROMPT".into(), prompt.to_string());
 
-    // stream-json requires --verbose when used with --print/-p.
-    // Default resume behavior reuses the same session_id; pass --fork-session
-    // if you ever want a fresh id per turn.
-    //
-    // Extra flags (permission mode, tool allow/deny-lists) come from the
-    // `[claude]` section of config.toml. Headless mode can't show approval
-    // prompts, so tools like WebFetch are silently denied unless the user
-    // opts in via `permission_mode = "bypassPermissions"` or an explicit
-    // `allowed_tools` list.
     let extra_flags = build_claude_flags(claude_opts);
     let resume_frag = resume_session
         .map(|sid| format!(" --resume {}", shell_single_quote(sid)))
@@ -430,42 +496,137 @@ fn run_claude_task(
         r#"claude -p{resume_frag}{extra_flags} --output-format stream-json --verbose "$C9_PROMPT""#,
     );
 
-    elog(format!("[claude9] running claude -p on {box_id} (stream)"));
+    elog(format!("[claude9] launching background task on {box_id}"));
 
-    let mut stream = ClaudeStreamState::new();
-    run9::box_exec_streaming(
+    let created = run9::box_exec_bg(
         box_id,
         REMOTE_USER,
         WORKSPACE,
+        BG_DEADLINE,
         &env,
         &["/bin/bash", "-lc", &cmd],
-        |line| stream.handle_line(line),
     )?;
 
-    // Persist session id regardless of success, so a partially-failed turn
-    // can still be resumed.
-    if let Some(sid) = &stream.session_id {
-        state::save_session(box_id, sid)?;
-        elog(format!("[claude9] session: {sid}"));
+    let exec_id = created
+        .get("exec_id")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow!("exec-bg response missing exec_id: {created}"))?
+        .to_string();
+
+    elog(format!("[claude9] exec_id={exec_id}"));
+
+    let snippet: String = prompt.chars().take(200).collect();
+    let bg = BgTask {
+        exec_id: exec_id.clone(),
+        started_at: Utc::now(),
+        prompt_snippet: snippet,
+    };
+    state::save_bg_task(box_id, &bg)?;
+
+    let kind = if resume_session.is_some() {
+        "resume"
+    } else {
+        "task"
+    };
+    if let Err(e) = state::append_history(box_id, kind, prompt, None) {
+        elog(format!("[claude9] warn: history write failed: {e}"));
     }
+
+    poll_bg_task(box_id, &exec_id, false)
+}
+
+fn poll_bg_task(box_id: &str, exec_id: &str, from_start: bool) -> Result<()> {
+    let mut stream = ClaudeStreamState::new();
+    let mut line_buf = String::new();
+    let mut session_saved = false;
+    let mut first_pull = true;
+    let mut consecutive_errors: u32 = 0;
+
+    let interrupted = Arc::new(AtomicBool::new(false));
+    {
+        let flag = interrupted.clone();
+        ctrlc::set_handler(move || {
+            flag.store(true, Ordering::SeqCst);
+        })
+        .ok();
+    }
+
+    loop {
+        if interrupted.load(Ordering::SeqCst) {
+            elog(format!(
+                "[claude9] detached — task keeps running. Rejoin: claude9 join {box_id}"
+            ));
+            return Ok(());
+        }
+
+        let use_from_start = from_start && first_pull;
+        first_pull = false;
+
+        match run9::box_exec_bg_pull(exec_id, use_from_start) {
+            Ok(chunk) => {
+                consecutive_errors = 0;
+                if !chunk.is_empty() {
+                    line_buf.push_str(&chunk);
+                    while let Some(pos) = line_buf.find('\n') {
+                        let line = line_buf[..pos].to_string();
+                        line_buf = line_buf[pos + 1..].to_string();
+                        stream.handle_line(&line);
+                    }
+                }
+            }
+            Err(e) => {
+                // Transient errors happen briefly right after exec-bg
+                // returns (backend not ready yet) and sometimes once the
+                // exec is cleaned up. Retry up to PULL_ERROR_LIMIT before
+                // giving up.
+                consecutive_errors += 1;
+                if stream.final_result.is_some() || consecutive_errors >= PULL_ERROR_LIMIT {
+                    if stream.final_result.is_none() {
+                        elog(format!("[claude9] task ended unexpectedly: {e}"));
+                    }
+                    break;
+                }
+            }
+        }
+
+        if !session_saved {
+            if let Some(sid) = &stream.session_id {
+                if let Err(e) = state::save_session(box_id, sid) {
+                    elog(format!("[claude9] warn: session write failed: {e}"));
+                } else {
+                    elog(format!("[claude9] session: {sid}"));
+                }
+                session_saved = true;
+            }
+        }
+
+        if stream.final_result.is_some() {
+            break;
+        }
+
+        thread::sleep(BG_POLL_INTERVAL);
+    }
+
+    // Flush any remaining partial line.
+    let tail = line_buf.trim();
+    if !tail.is_empty() {
+        stream.handle_line(tail);
+    }
+
+    if !session_saved {
+        if let Some(sid) = &stream.session_id {
+            let _ = state::save_session(box_id, sid);
+            elog(format!("[claude9] session: {sid}"));
+        }
+    }
+
+    state::clear_bg_task(box_id)?;
 
     if stream.is_error {
         bail!(
             "claude -p reported error: {}",
             stream.final_result.as_deref().unwrap_or("<no result>")
         );
-    }
-
-    // Record the invocation so the interactive picker can show recent
-    // activity on a box. Best-effort — a history write failure shouldn't
-    // flip an otherwise-successful task to a non-zero exit.
-    let kind = if resume_session.is_some() {
-        "resume"
-    } else {
-        "task"
-    };
-    if let Err(e) = state::append_history(box_id, kind, prompt, stream.session_id.as_deref()) {
-        elog(format!("[claude9] warn: history write failed: {e}"));
     }
 
     Ok(())
