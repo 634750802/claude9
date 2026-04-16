@@ -373,7 +373,7 @@
         <p class="tagline">
           Spawn <code>run9</code> dev boxes preloaded for Claude. Fork a base
           box, clone your project's repos into it, and run <code>claude -p</code>
-          tasks with session persistence &mdash; resume by box id.
+          tasks in the background &mdash; detach, rejoin, and resume by box id.
         </p>
         <div class="cta-row">
           <a class="btn btn-primary" href="#install">
@@ -396,8 +396,8 @@
         <code>claude9</code> is a small Rust CLI that forks a preconfigured
         <code>run9</code> base box, clones a project group's repos into
         <code>/home/guy/workspace/repos/</code> inside it, and runs
-        <code>claude -p</code> tasks on the box with session persistence
-        so follow-ups continue the same conversation.
+        <code>claude -p</code> tasks on the box in the background &mdash;
+        detach on <code>Ctrl+C</code>, rejoin later, resume sessions by box id.
       </p>
       <p>
         Config and per-box state live under
@@ -429,7 +429,7 @@
 
     <section>
       <span class="section-label">// quick tour</span>
-      <h2>Four commands, one session.</h2>
+      <h2>Spawn, stream, detach, resume.</h2>
       <div class="term">
         <div class="term-bar">
           <span>~/projects/my-group</span>
@@ -441,8 +441,12 @@
 <span class="comment"># create a box, clone configured repos into it</span>
 <span class="prompt">$</span> <span class="cmd">claude9</span> <span class="arg">spawn</span> <span class="flag">--name</span> <span class="arg">my-box</span>
 
-<span class="comment"># stream a claude -p turn on the box</span>
+<span class="comment"># run a claude -p turn — streams live, runs in the background</span>
 <span class="prompt">$</span> <span class="cmd">claude9</span> <span class="arg">task my-box</span> <span class="flag">"audit db9-server for N+1 queries"</span>
+<span class="comment">^C  # detach — remote task keeps running</span>
+
+<span class="comment"># reattach any time (replays from the start)</span>
+<span class="prompt">$</span> <span class="cmd">claude9</span> <span class="arg">join my-box</span>
 
 <span class="comment"># follow up on the same session</span>
 <span class="prompt">$</span> <span class="cmd">claude9</span> <span class="arg">resume my-box</span> <span class="flag">"draft a fix for the worst three"</span></pre></div>
@@ -486,11 +490,31 @@
         </div>
         <div class="row">
           <div class="name">claude9 task</div>
-          <div class="desc">Stream one <code>claude -p</code> turn on an existing box. Saves the session id for resume.</div>
+          <div class="desc">Run one <code>claude -p</code> turn on a box as a background task. Streams live; <code>Ctrl+C</code> detaches without killing it.</div>
         </div>
         <div class="row">
           <div class="name">claude9 resume</div>
           <div class="desc">Continue the last session on a box with a follow-up prompt.</div>
+        </div>
+        <div class="row">
+          <div class="name">claude9 talk</div>
+          <div class="desc">Find-or-spawn a named box and hand a TTY to an interactive <code>claude</code> session.</div>
+        </div>
+        <div class="row">
+          <div class="name">claude9 bash</div>
+          <div class="desc">Drop into <code>/bin/bash</code> on a box (defaults to the base box &mdash; useful for preparing it).</div>
+        </div>
+        <div class="row">
+          <div class="name">claude9 join</div>
+          <div class="desc">Reattach to a box's running background task; replays output from the start, then keeps streaming.</div>
+        </div>
+        <div class="row">
+          <div class="name">claude9 stop</div>
+          <div class="desc">Kill the background task on a box.</div>
+        </div>
+        <div class="row">
+          <div class="name">claude9 ps</div>
+          <div class="desc">List background tasks in the current project group.</div>
         </div>
       </div>
     </section>
