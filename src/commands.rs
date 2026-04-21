@@ -447,7 +447,7 @@ impl ClaudeStreamState {
 }
 
 const BG_DEADLINE: &str = "10h";
-const BG_POLL_INTERVAL: Duration = Duration::from_secs(2);
+const BG_POLL_INTERVAL: Duration = Duration::from_secs(5);
 /// Max consecutive `pull-output` errors before we give up. Transient
 /// errors happen right after `exec-bg` returns (backend not yet ready)
 /// and sometimes once the exec is reaped after completion — both are
