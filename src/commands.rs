@@ -582,7 +582,9 @@ fn poll_bg_task(box_id: &str, exec_id: &str, from_start: bool) -> Result<()> {
                 consecutive_errors += 1;
                 if stream.final_result.is_some() || consecutive_errors >= PULL_ERROR_LIMIT {
                     if stream.final_result.is_none() {
-                        elog(format!("[claude9] task ended unexpectedly: {e}"));
+                        elog(format!(
+                            "[claude9] pull-output failed {PULL_ERROR_LIMIT}× in a row: {e}"
+                        ));
                     }
                     break;
                 }
@@ -620,7 +622,19 @@ fn poll_bg_task(box_id: &str, exec_id: &str, from_start: bool) -> Result<()> {
         }
     }
 
-    state::clear_bg_task(box_id)?;
+    // Only clear the local bg.toml when the task actually completed —
+    // i.e. we saw `final_result` in the stream. Hitting `PULL_ERROR_LIMIT`
+    // without a final_result is ambiguous: could be a long network
+    // outage with the remote task still running. Keep the record so the
+    // user can retry `claude9 join` or discard via `claude9 stop`.
+    if stream.final_result.is_some() {
+        state::clear_bg_task(box_id)?;
+    } else {
+        elog(format!(
+            "[claude9] detached — task may still be running remotely. \
+             Rejoin: claude9 join {box_id}  |  Discard: claude9 stop {box_id}"
+        ));
+    }
 
     if stream.is_error {
         bail!(
