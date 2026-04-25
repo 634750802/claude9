@@ -271,7 +271,40 @@ pub fn ps() -> Result<()> {
         elog("[claude9] no background tasks");
         return Ok(());
     }
-    for (box_id, t) in &tasks {
+
+    // `bg.toml` is only a local cache; the remote is the source of
+    // truth for liveness (see CLAUDE.md). Probe each exec_id once so
+    // we don't list records for tasks that completed/died remotely.
+    let probed: Vec<(String, BgTask, bool)> = tasks
+        .into_iter()
+        .map(|(id, t)| {
+            let alive = run9::box_exec_bg_pull(&t.exec_id, false).is_ok();
+            (id, t, alive)
+        })
+        .collect();
+
+    // Safety net: if every probe failed, assume run9 is unreachable
+    // rather than stale — showing `unknown` is much better than
+    // silently wiping every record because the network blinked.
+    let any_alive = probed.iter().any(|(_, _, alive)| *alive);
+    let run9_unreachable = !any_alive;
+
+    if run9_unreachable {
+        elog("[claude9] run9 unreachable — showing records without probing");
+    }
+
+    for (box_id, t, alive) in &probed {
+        let status = if run9_unreachable {
+            "unknown"
+        } else if *alive {
+            "running"
+        } else {
+            // Remote says this exec is gone — clean the stale cache,
+            // but still show a row so the user sees which box was
+            // reaped (and why their "running" list just shrank).
+            let _ = state::clear_bg_task(box_id);
+            "cleaned"
+        };
         let age = Utc::now().signed_duration_since(t.started_at);
         let age_str = if age.num_hours() > 0 {
             format!("{}h{}m ago", age.num_hours(), age.num_minutes() % 60)
@@ -279,8 +312,9 @@ pub fn ps() -> Result<()> {
             format!("{}m ago", age.num_minutes())
         };
         let snippet: String = t.prompt_snippet.chars().take(60).collect();
-        eprintln!("  {box_id}  {age_str:>10}  {snippet}");
+        eprintln!("  {box_id}  {status:<8}  {age_str:>10}  {snippet}");
     }
+
     Ok(())
 }
 
